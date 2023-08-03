@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
-
+using System.Text.Json;
 using Xunit;
 
 namespace Altinn.Notifications.Email.IntegrationTests.Integrations;
@@ -27,11 +27,15 @@ public class EmailSendingConsumerTests : IDisposable
     }
 
     [Fact]
-    public async Task Test()
+    public async Task ConsumeEmailTest_Successfull_deserialization_of_message_Service_called_once()
     {
         // Arrange
         await KafkaUtil.CreateTopicsAsync(TestTopic);
-        await KafkaUtil.PostMessage(TestTopic, "test message");
+
+        Core.Models.Email email = 
+            new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", Core.Models.EmailContentType.Plain);
+
+        await KafkaUtil.PostMessage(TestTopic, JsonSerializer.Serialize(email));
 
         var kafkaSettings = new KafkaSettings
         {
@@ -45,11 +49,11 @@ public class EmailSendingConsumerTests : IDisposable
 
         // Act
         await sut.StartAsync(CancellationToken.None);
-        await Task.Delay(5000);
+        await Task.Delay(10000);
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<string>()), Times.Once);
+        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<Core.Models.Email>()), Times.Once);
     }
 
     public void Dispose()

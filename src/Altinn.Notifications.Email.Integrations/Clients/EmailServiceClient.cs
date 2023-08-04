@@ -1,5 +1,7 @@
 ﻿using Altinn.Notifications.Email.Core;
 
+using Microsoft.Extensions.Logging;
+
 namespace Altinn.Notifications.Email.Integrations.Clients;
 
 /// <summary>
@@ -8,6 +10,17 @@ namespace Altinn.Notifications.Email.Integrations.Clients;
 /// </summary>
 public class EmailServiceClient : IEmailServiceClient
 {
+    private readonly ILogger<EmailServiceClient> _logger;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
+    /// </summary>
+    /// <param name="logger">A logger the class can use for logging.</param>
+    public EmailServiceClient(ILogger<EmailServiceClient> logger)
+    {
+        _logger = logger;
+    }
+
     /// <summary>
     /// Send an email
     /// </summary>
@@ -16,6 +29,8 @@ public class EmailServiceClient : IEmailServiceClient
     /// <exception cref="NotImplementedException">Implementation pending</exception>
     public Task SendEmail(Core.Models.Email email)
     {
-        throw new NotImplementedException();
+        _logger.LogError("Send email has not been implemented!");
+
+        return Task.CompletedTask;
     }
 }

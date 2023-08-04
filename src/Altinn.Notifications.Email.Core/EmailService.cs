@@ -1,6 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
-
-namespace Altinn.Notifications.Email.Core;
+﻿namespace Altinn.Notifications.Email.Core;
 
 /// <summary>
 /// Dummy class
@@ -8,17 +6,14 @@ namespace Altinn.Notifications.Email.Core;
 public class EmailService : IEmailService
 {
     private readonly IEmailServiceClient _emailServiceClient;
-    private readonly ILogger<EmailService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailService"/> class.
     /// </summary>
     /// <param name="emailServiceClient">A client that can perform actual mail sending.</param>
-    /// <param name="logger">A logger</param>
-    public EmailService(IEmailServiceClient emailServiceClient, ILogger<EmailService> logger)
+    public EmailService(IEmailServiceClient emailServiceClient)
     {
         _emailServiceClient = emailServiceClient;
-        _logger = logger;
     }
 
     /// <inheritdoc/>

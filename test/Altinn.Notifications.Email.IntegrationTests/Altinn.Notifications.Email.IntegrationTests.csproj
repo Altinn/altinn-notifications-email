@@ -25,7 +25,6 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\..\src\Altinn.Notifications.Email\Altinn.Notifications.Email.csproj" />
-		<ProjectReference Include="..\Altinn.Notifications.Email.Tests\Altinn.Notifications.Email.Tests.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

@@ -82,7 +82,6 @@ public sealed class EmailSendingConsumer : BackgroundService
                 if (consumeResult != null)
                 {
                     string serializedEmail = consumeResult.Message.Value;
-                    _logger.LogWarning(serializedEmail);
                     Core.Models.Email? email = JsonSerializer.Deserialize<Core.Models.Email>(serializedEmail);
                     await _emailService.SendEmail(email);
                 }

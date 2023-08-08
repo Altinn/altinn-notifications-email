@@ -16,7 +16,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations;
 
 public class EmailSendingConsumerTests : IDisposable
 {
-    private const string TestTopic = "email-sending";
+    private readonly string TestTopic = Guid.NewGuid().ToString();
 
     Mock<IEmailService> _emailServiceMock;
 

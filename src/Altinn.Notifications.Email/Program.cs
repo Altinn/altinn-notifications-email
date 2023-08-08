@@ -1,5 +1,7 @@
 using Altinn.Notifications.Email.Configuration;
+using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Health;
+using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Startup;
 
 using Azure.Identity;

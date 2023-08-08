@@ -31,11 +31,43 @@ public class EmailSendingConsumerTests : IDisposable
         // Arrange
         await KafkaUtil.CreateTopicsAsync(TestTopic);
 
-        Core.Models.Email email = 
+        Core.Models.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", Core.Models.EmailContentType.Plain);
 
         await KafkaUtil.PostMessage(TestTopic, JsonSerializer.Serialize(email));
 
+        using EmailSendingConsumer sut = GetEmailSendingConsumer();
+
+        // Act
+        await sut.StartAsync(CancellationToken.None);
+        await Task.Delay(10000);
+        await sut.StopAsync(CancellationToken.None);
+
+        // Assert
+        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<Core.Models.Email>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ConsumeEmailTest_Deserialization_of_message_fails_Never_calls_service()
+    {
+        // Arrange
+        await KafkaUtil.CreateTopicsAsync(TestTopic);
+
+        await KafkaUtil.PostMessage(TestTopic, "Not an email");
+
+        using EmailSendingConsumer sut = GetEmailSendingConsumer();
+
+        // Act
+        await sut.StartAsync(CancellationToken.None);
+        await Task.Delay(10000);
+        await sut.StopAsync(CancellationToken.None);
+
+        // Assert
+        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<Core.Models.Email>()), Times.Never);
+    }
+
+    private EmailSendingConsumer GetEmailSendingConsumer()
+    {
         var kafkaSettings = new KafkaSettings
         {
             BrokerAddress = "localhost:9092",
@@ -54,15 +86,14 @@ public class EmailSendingConsumerTests : IDisposable
 
         var serviceProvider = services.BuildServiceProvider();
 
-        using var sut = serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
+        var sut = serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
 
-        // Act
-        await sut!.StartAsync(CancellationToken.None);
-        await Task.Delay(10000);
-        await sut.StopAsync(CancellationToken.None);
+        if (sut == null)
+        {
+            Assert.Fail("Unable to create an instance of EmailSendingConsumer.");
+        }
 
-        // Assert
-        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<Core.Models.Email>()), Times.Once);
+        return sut;
     }
 
     public void Dispose()

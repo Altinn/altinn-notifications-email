@@ -14,13 +14,12 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// <summary>
 /// Kafka consumer class for handling the email queue.
 /// </summary>
-public class EmailSendingConsumer : IHostedService
+public sealed class EmailSendingConsumer : BackgroundService
 {
     private readonly KafkaSettings _kafkaSettings;
     private readonly IEmailService _emailService;
     private readonly ILogger<EmailSendingConsumer> _logger;
 
-    private readonly CancellationTokenSource _cancellationTokenSource;
     private readonly IConsumer<string, string> _consumer;
 
     /// <summary>
@@ -34,8 +33,6 @@ public class EmailSendingConsumer : IHostedService
         _kafkaSettings = kafkaSettings;
         _emailService = emailService;
         _logger = logger;
-
-        _cancellationTokenSource = new CancellationTokenSource();
 
         var consumerConfig = new ConsumerConfig
         {
@@ -59,28 +56,24 @@ public class EmailSendingConsumer : IHostedService
     }
 
     /// <inheritdoc/>
-    public Task StartAsync(CancellationToken cancellationToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _consumer.Subscribe(_kafkaSettings.EmailSendingConsumerSettings.TopicName);
-
-        Task.Run(() => ConsumeEmail(_cancellationTokenSource.Token), cancellationToken);
-
-        return Task.CompletedTask;
+        return Task.Run(() => ConsumeEmail(stoppingToken), stoppingToken);
     }
 
     /// <inheritdoc/>
-    public Task StopAsync(CancellationToken cancellationToken)
+    public override void Dispose()
     {
-        _cancellationTokenSource.Cancel();
-
         _consumer.Close();
         _consumer.Dispose();
 
-        return Task.CompletedTask;
+        base.Dispose();
     }
 
     private async Task ConsumeEmail(CancellationToken cancellationToken)
     {
+        _consumer.Subscribe(_kafkaSettings.EmailSendingConsumerSettings.TopicName);
+
         try
         {
             while (!cancellationToken.IsCancellationRequested)

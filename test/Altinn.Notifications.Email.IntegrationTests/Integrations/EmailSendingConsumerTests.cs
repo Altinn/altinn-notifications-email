@@ -54,7 +54,7 @@ public class EmailSendingConsumerTests : IDisposable
 
         var serviceProvider = services.BuildServiceProvider();
 
-        var sut = serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
+        using var sut = serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
 
         // Act
         await sut!.StartAsync(CancellationToken.None);

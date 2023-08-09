@@ -8,7 +8,7 @@ using Altinn.Notifications.Email.IntegrationTests.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-using Moq;
+using NSubstitute;
 
 using Xunit;
 
@@ -18,11 +18,11 @@ public class EmailSendingConsumerTests : IDisposable
 {
     private readonly string TestTopic = Guid.NewGuid().ToString();
 
-    Mock<IEmailService> _emailServiceMock;
+    IEmailService _emailServiceMock;
 
     public EmailSendingConsumerTests()
     {
-        _emailServiceMock = new Mock<IEmailService>();
+        _emailServiceMock = Substitute.For<IEmailService>();
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public class EmailSendingConsumerTests : IDisposable
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<Core.Models.Email>()), Times.Once);
+        await _emailServiceMock.Received().SendEmail(Arg.Any<Core.Models.Email>());
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class EmailSendingConsumerTests : IDisposable
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        _emailServiceMock.Verify(s => s.SendEmail(It.IsAny<Core.Models.Email>()), Times.Never);
+        await _emailServiceMock.DidNotReceive().SendEmail(Arg.Any<Core.Models.Email>());
     }
 
     private EmailSendingConsumer GetEmailSendingConsumer()
@@ -81,7 +81,7 @@ public class EmailSendingConsumerTests : IDisposable
         IServiceCollection services = new ServiceCollection()
             .AddLogging()
             .AddSingleton(kafkaSettings)
-            .AddSingleton(_emailServiceMock.Object)
+            .AddSingleton(_emailServiceMock)
             .AddHostedService<EmailSendingConsumer>();
 
         var serviceProvider = services.BuildServiceProvider();

@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Altinn.Notifications.Email.IntegrationTests.Integrations;
 
-public class EmailSendingConsumerTests : IDisposable
+public sealed class EmailSendingConsumerTests : IAsyncLifetime
 {
     private readonly string TestTopic = Guid.NewGuid().ToString();
 
@@ -25,12 +25,20 @@ public class EmailSendingConsumerTests : IDisposable
         _emailServiceMock = Substitute.For<IEmailService>();
     }
 
+    public async Task InitializeAsync()
+    {
+        await KafkaUtil.CreateTopicsAsync(TestTopic);
+    }
+
+    public async Task DisposeAsync()
+    {
+        await KafkaUtil.DeleteTopicAsync(TestTopic);
+    }
+
     [Fact]
     public async Task ConsumeEmailTest_Successfull_deserialization_of_message_Service_called_once()
     {
         // Arrange
-        await KafkaUtil.CreateTopicsAsync(TestTopic);
-
         Core.Models.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", Core.Models.EmailContentType.Plain);
 
@@ -51,8 +59,6 @@ public class EmailSendingConsumerTests : IDisposable
     public async Task ConsumeEmailTest_Deserialization_of_message_fails_Never_calls_service()
     {
         // Arrange
-        await KafkaUtil.CreateTopicsAsync(TestTopic);
-
         await KafkaUtil.PostMessage(TestTopic, "Not an email");
 
         using EmailSendingConsumer sut = GetEmailSendingConsumer();
@@ -94,10 +100,5 @@ public class EmailSendingConsumerTests : IDisposable
         }
 
         return sut;
-    }
-
-    public void Dispose()
-    {
-        KafkaUtil.DeleteTopicAsync(TestTopic).Wait();
     }
 }

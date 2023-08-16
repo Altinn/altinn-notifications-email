@@ -16,6 +16,8 @@ public class IntegrationTestWebApplicationFactory<TStartup> : WebApplicationFact
     /// <param name="builder">IWebHostBuilder</param>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
+
         builder.ConfigureAppConfiguration(config =>
         {
             config.AddConfiguration(new ConfigurationBuilder()

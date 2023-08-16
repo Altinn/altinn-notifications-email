@@ -27,29 +27,4 @@ public static class KafkaUtil
             }
         });
     }
-
-    public static async Task PostMessage(string topic, string message)
-    {
-        var config = new ProducerConfig
-        {
-            BootstrapServers = _brokerAddress,
-            Acks = Acks.All,
-            EnableDeliveryReports = true,
-            EnableIdempotence = true,
-            MessageSendMaxRetries = 3,
-            RetryBackoffMs = 1000
-        };
-
-        using var producer = new ProducerBuilder<Null, string>(config).Build();
-
-        DeliveryResult<Null, string> result = await producer.ProduceAsync(topic, new Message<Null, string>
-        {
-            Value = message
-        });
-
-        if (result.Status != PersistenceStatus.Persisted)
-        {
-            throw new Exception($"Non positive result: {result.Status}");
-        }
-    }
 }

@@ -1,7 +1,6 @@
 ﻿using System.Text.Json;
 
 using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Confluent.Kafka;
@@ -34,24 +33,17 @@ public sealed class EmailSendingConsumer : BackgroundService
         _emailService = emailService;
         _logger = logger;
 
-        var consumerConfig = new ConsumerConfig
+        var config = new SharedClientConfig(_kafkaSettings);
+        var consumerConfig = new ConsumerConfig(config.ClientConfig)
         {
-            BootstrapServers = _kafkaSettings.BrokerAddress,
             GroupId = _kafkaSettings.EmailSendingConsumerSettings.ConsumerGroupId,
-            AutoOffsetReset = AutoOffsetReset.Earliest
+            EnableAutoCommit = false,
+            EnableAutoOffsetStore = false,
+            AutoOffsetReset = AutoOffsetReset.Earliest,
         };
 
         _consumer = new ConsumerBuilder<string, string>(consumerConfig)
             .SetErrorHandler((_, e) => _logger.LogError("Error: {reason}", e.Reason))
-            .SetStatisticsHandler((_, json) => _logger.LogInformation("Statistics: {json}", json))
-            .SetPartitionsAssignedHandler((c, partitions) =>
-            {
-                _logger.LogInformation("Assigned partitions: [partitions]", string.Join(", ", partitions));
-            })
-            .SetPartitionsRevokedHandler((c, partitions) =>
-            {
-                _logger.LogInformation("Revoking assignment for partitions: [partitions]", string.Join(", ", partitions));
-            })
             .Build();
     }
 
@@ -83,7 +75,16 @@ public sealed class EmailSendingConsumer : BackgroundService
                 {
                     string serializedEmail = consumeResult.Message.Value;
                     Core.Models.Email? email = JsonSerializer.Deserialize<Core.Models.Email>(serializedEmail);
-                    await _emailService.SendEmail(email);
+                    if (email != null)
+                    {
+                        await _emailService.SendEmail(email);
+                    }
+                    else
+                    {
+                        _logger.LogError(
+                            "Message on topic {topic} did not produce an Core.Models.Email instance",
+                            _kafkaSettings.EmailSendingConsumerSettings.TopicName);
+                    }
                 }
             }
         }

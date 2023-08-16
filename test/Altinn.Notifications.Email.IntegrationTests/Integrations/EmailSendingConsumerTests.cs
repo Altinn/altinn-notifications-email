@@ -1,8 +1,10 @@
 ﻿using System.Text.Json;
 
 using Altinn.Notifications.Email.Core;
+using Altinn.Notifications.Email.Integrations.Clients;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
+using Altinn.Notifications.Email.Integrations.Producers;
 using Altinn.Notifications.Email.IntegrationTests.Utils;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -18,11 +20,38 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
 {
     private readonly string TestTopic = Guid.NewGuid().ToString();
 
-    IEmailService _emailServiceMock;
+    private readonly IEmailService _emailServiceMock;
+
+    private readonly ServiceProvider _serviceProvider;
 
     public EmailSendingConsumerTests()
     {
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
+
         _emailServiceMock = Substitute.For<IEmailService>();
+
+        var kafkaSettings = new KafkaSettings
+        {
+            BrokerAddress = "localhost:9092",
+            EmailSendingConsumerSettings = new()
+            {
+                ConsumerGroupId = "email-sending-consumer",
+                TopicName = TestTopic
+            },
+            EmailSendingAcceptedProducerSettings = new()
+            {
+                TopicName = TestTopic
+            }
+        };
+
+        IServiceCollection services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton(kafkaSettings)
+            .AddSingleton<IEmailSendingAcceptedProducer, EmailSendingAcceptedProducer>()
+            .AddSingleton(_emailServiceMock)
+            .AddHostedService<EmailSendingConsumer>();
+
+        _serviceProvider = services.BuildServiceProvider();
     }
 
     public async Task InitializeAsync()
@@ -42,11 +71,12 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         Core.Models.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", Core.Models.EmailContentType.Plain);
 
-        await KafkaUtil.PostMessage(TestTopic, JsonSerializer.Serialize(email));
-
+        using EmailSendingAcceptedProducer kafkaProducer = GetKafkaProducer();
         using EmailSendingConsumer sut = GetEmailSendingConsumer();
 
         // Act
+        await kafkaProducer.ProduceAsync(JsonSerializer.Serialize(email));
+
         await sut.StartAsync(CancellationToken.None);
         await Task.Delay(10000);
         await sut.StopAsync(CancellationToken.None);
@@ -59,11 +89,12 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     public async Task ConsumeEmailTest_Deserialization_of_message_fails_Never_calls_service()
     {
         // Arrange
-        await KafkaUtil.PostMessage(TestTopic, "Not an email");
-
+        using EmailSendingAcceptedProducer kafkaProducer = GetKafkaProducer();
         using EmailSendingConsumer sut = GetEmailSendingConsumer();
 
         // Act
+        await kafkaProducer.ProduceAsync("Not an email");
+
         await sut.StartAsync(CancellationToken.None);
         await Task.Delay(10000);
         await sut.StopAsync(CancellationToken.None);
@@ -74,31 +105,25 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
 
     private EmailSendingConsumer GetEmailSendingConsumer()
     {
-        var kafkaSettings = new KafkaSettings
-        {
-            BrokerAddress = "localhost:9092",
-            EmailSendingConsumerSettings = new()
-            {
-                ConsumerGroupId = "email-sending-consumer",
-                TopicName = TestTopic
-            }
-        };
+        var emailSendingConsumer = _serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
 
-        IServiceCollection services = new ServiceCollection()
-            .AddLogging()
-            .AddSingleton(kafkaSettings)
-            .AddSingleton(_emailServiceMock)
-            .AddHostedService<EmailSendingConsumer>();
-
-        var serviceProvider = services.BuildServiceProvider();
-
-        var sut = serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
-
-        if (sut == null)
+        if (emailSendingConsumer == null)
         {
             Assert.Fail("Unable to create an instance of EmailSendingConsumer.");
         }
 
-        return sut;
+        return emailSendingConsumer;
+    }
+
+    private EmailSendingAcceptedProducer GetKafkaProducer()
+    {
+        var kafkaProducer = _serviceProvider.GetService(typeof(IEmailSendingAcceptedProducer)) as EmailSendingAcceptedProducer;
+
+        if (kafkaProducer == null)
+        {
+            Assert.Fail("Unable to create an instance of KafkaProducer.");
+        }
+
+        return kafkaProducer;
     }
 }

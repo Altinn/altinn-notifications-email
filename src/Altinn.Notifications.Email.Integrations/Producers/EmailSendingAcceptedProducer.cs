@@ -10,98 +10,27 @@ namespace Altinn.Notifications.Email.Integrations.Producers;
 /// <summary>
 /// Implementation of a Kafka producer
 /// </summary>
-public sealed class EmailSendingAcceptedProducer : IEmailSendingAcceptedProducer, IDisposable
+public sealed class EmailSendingAcceptedProducer : IEmailSendingAcceptedProducer
 {
-    private readonly IProducer<Null, string> _producer;
     private readonly KafkaSettings _kafkaSettings;
-    private readonly SharedClientConfig _sharedClientConfig;
+    private readonly ICommonProducer _commonProducer;
     private readonly ILogger<EmailSendingAcceptedProducer> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailSendingAcceptedProducer"/> class.
     /// </summary>
-    public EmailSendingAcceptedProducer(KafkaSettings kafkaSettings, ILogger<EmailSendingAcceptedProducer> logger)
+    public EmailSendingAcceptedProducer(
+        KafkaSettings kafkaSettings, ICommonProducer commonProducer, ILogger<EmailSendingAcceptedProducer> logger)
     {
         _kafkaSettings = kafkaSettings;
+        _commonProducer = commonProducer;
         _logger = logger;
-        
-        _sharedClientConfig = new SharedClientConfig(kafkaSettings);
-
-        var config = new ProducerConfig(_sharedClientConfig.ClientConfig)
-        {
-            Acks = Acks.All,
-            EnableDeliveryReports = true,
-            EnableIdempotence = true,
-            MessageSendMaxRetries = 3,
-            RetryBackoffMs = 1000
-        };
-
-        _producer = new ProducerBuilder<Null, string>(config).Build();
-        EnsureTopicsExist();
     }
 
     /// <inheritdoc/>
     public async Task<bool> ProduceAsync(string message)
     {
-        try
-        {
-            DeliveryResult<Null, string> result = await _producer.ProduceAsync(
-                _kafkaSettings.EmailSendingAcceptedProducerSettings.TopicName, new Message<Null, string>
-            {
-                Value = message
-            });
-
-            if (result.Status != PersistenceStatus.Persisted)
-            {
-                _logger.LogError("// KafkaProducer // ProduceAsync // Message not ack'd by all brokers (value: '{message}'). Delivery status: {result.Status}", message, result.Status);
-                return false;
-            }
-        }
-        catch (ProduceException<long, string> ex)
-        {
-            _logger.LogError(ex, "// KafkaProducer // ProduceAsync // Permanent error: {Message} for message (value: '{DeliveryResult}')", ex.Message, ex.DeliveryResult.Value);
-            throw;
-        }
-
-        return true;
-    }
-
-    /// <inheritdoc/>
-    public void Dispose()
-    {
-        _producer?.Flush();
-        _producer?.Dispose();
-        GC.SuppressFinalize(this);
-    }
-
-    private void EnsureTopicsExist()
-    {
-        using var adminClient = new AdminClientBuilder(_sharedClientConfig.AdminClientConfig).Build();
-        var existingTopics = adminClient.GetMetadata(TimeSpan.FromSeconds(10)).Topics;
-
-        foreach (string topic in _kafkaSettings.TopicList)
-        {
-            if (!existingTopics.Exists(t => t.Topic.Equals(topic, StringComparison.OrdinalIgnoreCase)))
-            {
-                try
-                {
-                    adminClient.CreateTopicsAsync(new TopicSpecification[]
-                    {
-                        new TopicSpecification()
-                        {
-                            Name = topic,
-                            NumPartitions = _sharedClientConfig.TopicSpecification.NumPartitions,
-                            ReplicationFactor = _sharedClientConfig.TopicSpecification.ReplicationFactor
-                        }
-                    }).Wait();
-                    _logger.LogInformation("// KafkaProducer // EnsureTopicsExists // Topic '{Topic}' created successfully.", topic);
-                }
-                catch (CreateTopicsException ex)
-                {
-                    _logger.LogError(ex, "// KafkaProducer // EnsureTopicsExists // Failed to create topic '{Topic}'", topic);
-                    throw;
-                }
-            }
-        }
+        return await _commonProducer.ProduceAsync(
+            _kafkaSettings.EmailSendingAcceptedProducerSettings.TopicName, message);
     }
 }

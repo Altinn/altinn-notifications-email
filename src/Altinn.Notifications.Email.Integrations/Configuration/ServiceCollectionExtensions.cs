@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(kafkaSettings);
         services.AddHostedService<EmailSendingConsumer>();
 
+        services.AddSingleton<ICommonProducer, CommonProducer>();
         services.AddSingleton<IEmailSendingAcceptedProducer, EmailSendingAcceptedProducer>();
         return services;
     }

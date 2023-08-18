@@ -1,7 +1,4 @@
-﻿using System.Text.Json;
-
-using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Integrations.Clients;
+﻿using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;
@@ -11,6 +8,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 using NSubstitute;
+
+using System.Text.Json;
 
 using Xunit;
 
@@ -27,16 +26,14 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
 
     public EmailSendingConsumerTests()
     {
-        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
-
         _emailServiceMock = Substitute.For<IEmailService>();
 
         var kafkaSettings = new KafkaSettings
         {
             BrokerAddress = "localhost:9092",
+            ConsumerGroupId = "email-sending-consumer",
             EmailSendingConsumerSettings = new()
             {
-                ConsumerGroupId = "email-sending-consumer",
                 TopicName = EmailSendingConsumerTopic
             },
             EmailSendingAcceptedProducerSettings = new()

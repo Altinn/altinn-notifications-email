@@ -21,18 +21,27 @@ public static class ServiceCollectionExtensions
     /// <returns>The given service collection.</returns>
     public static IServiceCollection AddIntegrationServices(this IServiceCollection services, IConfiguration config)
     {
-        CommunicationServicesSettings communicationServicesSettings = new();
-        config.GetSection(nameof(CommunicationServicesSettings)).Bind(communicationServicesSettings);
-        services.AddSingleton(communicationServicesSettings);
-        services.AddSingleton<IEmailServiceClient, EmailServiceClient>();
+        KafkaSettings kafkaSettings = config!.GetSection(nameof(KafkaSettings)).Get<KafkaSettings>()!;
 
-        KafkaSettings kafkaSettings = new();
-        config.GetSection(nameof(KafkaSettings)).Bind(kafkaSettings);
-        services.AddSingleton(kafkaSettings);
-        services.AddHostedService<EmailSendingConsumer>();
+        if (kafkaSettings == null)
+        {
+            throw new ArgumentNullException(nameof(config), "Required KafkaSettings is missing from application configuration");
+        }
 
-        services.AddSingleton<ICommonProducer, CommonProducer>();
-        services.AddSingleton<IEmailSendingAcceptedProducer, EmailSendingAcceptedProducer>();
+        CommunicationServicesSettings communicationServicesSettings = config!.GetSection(nameof(CommunicationServicesSettings)).Get<CommunicationServicesSettings>()!;
+
+        if (communicationServicesSettings == null)
+        {
+            throw new ArgumentNullException(nameof(config), "Required CommunicationServicesSettings is missing from application configuration");
+        }
+
+        services
+            .AddSingleton<IEmailServiceClient, EmailServiceClient>()
+            .AddSingleton<ICommonProducer, CommonProducer>()
+            .AddSingleton<IEmailSendingAcceptedProducer, EmailSendingAcceptedProducer>()
+            .AddHostedService<EmailSendingConsumer>()
+            .AddSingleton(kafkaSettings)
+            .AddSingleton(communicationServicesSettings);
         return services;
     }
 }

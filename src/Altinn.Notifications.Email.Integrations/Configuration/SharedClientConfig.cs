@@ -5,7 +5,7 @@ namespace Altinn.Notifications.Email.Integrations.Configuration;
 
 /// <summary>
 /// Container class for configuration objects used by producers and consumers. Will also help with
-/// initialization of some default settings common across all Kafka clients.
+/// initialization of some default kafkaSettings common across all Kafka clients.
 /// </summary>
 public class SharedClientConfig
 {
@@ -45,9 +45,7 @@ public class SharedClientConfig
             ReplicationFactor = 1
         };
 
-        bool isDevelopment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development";
-
-        if (!isDevelopment)
+        if (!string.IsNullOrEmpty(kafkaSettings.SaslUsername) && !string.IsNullOrEmpty(kafkaSettings.SaslPassword))
         {
             adminConfig.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm.Https;
             adminConfig.SecurityProtocol = SecurityProtocol.SaslSsl;

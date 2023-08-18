@@ -4,8 +4,6 @@ using Altinn.Notifications.Email.Integrations.Producers;
 
 using Azure.Communication.Email;
 
-using Microsoft.Extensions.Logging;
-
 namespace Altinn.Notifications.Email.Integrations.Clients;
 
 /// <summary>
@@ -14,24 +12,20 @@ namespace Altinn.Notifications.Email.Integrations.Clients;
 /// </summary>
 public class EmailServiceClient : IEmailServiceClient
 {
-    private readonly CommunicationServicesSettings _communicationServicesSettings;
     private readonly IEmailSendingAcceptedProducer _producer;
     private readonly EmailClient _emailClient;
-    private readonly ILogger<EmailServiceClient> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
     /// </summary>
     /// <param name="communicationServicesSettings">Settings for integration against Communication Services.</param>
     /// <param name="producer">A producer that can write a string to a KafkaTopic.</param>
-    /// <param name="logger">A logger the class can use for logging.</param>
     public EmailServiceClient(
-        CommunicationServicesSettings communicationServicesSettings, IEmailSendingAcceptedProducer producer, ILogger<EmailServiceClient> logger)
+        CommunicationServicesSettings communicationServicesSettings,
+        IEmailSendingAcceptedProducer producer)
     {
-        _communicationServicesSettings = communicationServicesSettings;
         _producer = producer;
-        _emailClient = new EmailClient(_communicationServicesSettings.ConnectionString);
-        _logger = logger;
+        _emailClient = new EmailClient(communicationServicesSettings.ConnectionString);
     }
 
     /// <summary>
@@ -41,7 +35,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// <returns>A Task representing the asyncrhonous operation.</returns>
     public async Task SendEmail(Core.Models.Email email)
     {
-        EmailContent emailContent = new EmailContent(email.Subject);
+        EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
         {
             case Core.Models.EmailContentType.Plain:
@@ -54,7 +48,7 @@ public class EmailServiceClient : IEmailServiceClient
                 break;
         }
 
-        EmailMessage emailMessage = new EmailMessage(email.FromAddress, email.ToAddress, emailContent);
+        EmailMessage emailMessage = new(email.FromAddress, email.ToAddress, emailContent);
         EmailSendOperation emailSendOperation = await _emailClient.SendAsync(Azure.WaitUntil.Completed, emailMessage);
 
         await _producer.ProduceAsync(emailSendOperation.Id);

@@ -1,7 +1,7 @@
 ﻿namespace Altinn.Notifications.Email.Integrations.Producers;
 
 /// <summary>
-/// Interface for handling all producer actions for Kafka
+/// Interface for handling all producer actions for the email sending accepted Kafka topic
 /// </summary>
 public interface IEmailSendingAcceptedProducer
 {

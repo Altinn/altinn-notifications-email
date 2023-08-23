@@ -16,7 +16,15 @@ public static class ServiceCollectionExtensions
     /// <returns>The given service collection.</returns>
     public static IServiceCollection AddCoreServices(this IServiceCollection services, IConfiguration config)
     {
-        services.AddSingleton<IEmailService, EmailService>();
+        TopicSettings topicSettings = config!.GetSection("KafkaSettings").Get<TopicSettings>()!;
+
+        if (topicSettings == null)
+        {
+            throw new ArgumentNullException(nameof(config), "Required Kafka topic settings is missing from application configuration");
+        }
+
+        services.AddSingleton<IEmailService, EmailService>()
+                .AddSingleton(topicSettings);
 
         return services;
     }

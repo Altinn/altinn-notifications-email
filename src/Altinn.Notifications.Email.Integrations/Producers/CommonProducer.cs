@@ -1,4 +1,5 @@
-﻿using Altinn.Notifications.Email.Integrations.Configuration;
+﻿using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
@@ -8,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace Altinn.Notifications.Email.Integrations.Producers;
 
 /// <summary>
-/// Implementation of a generic Kafka producer that can be uesd by other topic specific producers.
+/// Implementation of a generic Kafka producer.
 /// </summary>
 public sealed class CommonProducer : ICommonProducer, IDisposable
 {
@@ -18,7 +19,7 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
     private readonly ILogger<CommonProducer> _logger;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="EmailSendingAcceptedProducer"/> class.
+    /// Initializes a new instance of the <see cref="ICommonProducer"/> class.
     /// </summary>
     public CommonProducer(KafkaSettings kafkaSettings, ILogger<CommonProducer> logger)
     {

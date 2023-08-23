@@ -26,39 +26,17 @@ public class KafkaSettings
     public string SaslPassword { get; set; } = string.Empty;
 
     /// <summary>
-    /// Settings specific for the <see cref="EmailSendingConsumerSettings"/> consumer.
+    /// The name of the email sending accepted topic
     /// </summary>
-    public EmailSendingConsumerSettings EmailSendingConsumerSettings { get; set; } = new();
+    public string EmailSendingAcceptedTopicName { get; set; } = string.Empty;
 
     /// <summary>
-    /// Settings specific for the <see cref="EmailSendingAcceptedProducerSettings"/> consumer.
+    /// The name of the send email queue topic
     /// </summary>
-    public EmailSendingAcceptedProducerSettings EmailSendingAcceptedProducerSettings { get; set; } = new();
+    public string SendEmailQueueTopicName { get; set; } = string.Empty;
 
     /// <summary>
     /// List of topics this application will write to.
     /// </summary>
     public List<string> TopicList { get; set; } = new List<string>();
-}
-
-/// <summary>
-/// Configuration object for the <see cref="EmailSendingConsumerSettings"/>.
-/// </summary>
-public class EmailSendingConsumerSettings
-{
-    /// <summary>
-    /// The name of the email sending topic
-    /// </summary>
-    public string TopicName { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// Configuration object for the email sending accepted producer.
-/// </summary>
-public class EmailSendingAcceptedProducerSettings
-{
-    /// <summary>
-    /// The name of the email sending accepted topic
-    /// </summary>
-    public string TopicName { get; set; } = string.Empty;
 }

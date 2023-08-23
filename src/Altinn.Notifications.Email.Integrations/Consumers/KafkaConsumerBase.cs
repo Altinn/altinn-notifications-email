@@ -71,12 +71,14 @@ public abstract class KafkaConsumerBase<T> : BackgroundService
         Func<string, Task> retryMessageFunc,
         CancellationToken stoppingToken)
     {
-        string message = string.Empty;
-        try
+        while (!stoppingToken.IsCancellationRequested)
         {
-            while (!stoppingToken.IsCancellationRequested)
+            string message = string.Empty;
+            ConsumeResult<string, string>? consumeResult = null;
+
+            try
             {
-                var consumeResult = _consumer.Consume(stoppingToken);
+                consumeResult = _consumer.Consume(stoppingToken);
                 if (consumeResult != null)
                 {
                     await processMessageFunc(consumeResult.Message.Value);
@@ -84,15 +86,21 @@ public abstract class KafkaConsumerBase<T> : BackgroundService
                     _consumer.StoreOffset(consumeResult);
                 }
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected when cancellationToken is canceled
-        }
-        catch (Exception ex)
-        {
-            await retryMessageFunc(message!);
-            _logger.LogError(ex, "// {Class} // ConsumeOrder // An error occurred while consuming messages", GetType().Name);
+            catch (OperationCanceledException)
+            {
+                // Expected when cancellationToken is canceled
+            }
+            catch (Exception ex)
+            {
+                await retryMessageFunc(message!);
+
+                _logger.LogError(ex, "// {Class} // ConsumeOrder // An error occurred while consuming messages", GetType().Name);
+                if (consumeResult != null)
+                {
+                    _consumer.Commit(consumeResult);
+                    _consumer.StoreOffset(consumeResult);
+                }
+            }
         }
     }
 }

@@ -28,7 +28,7 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
 
         _sharedClientConfig = new SharedClientConfig(kafkaSettings);
 
-        var config = new ProducerConfig(_sharedClientConfig.ClientConfig)
+        var config = new ProducerConfig(_sharedClientConfig.ProducerConfig)
         {
             Acks = Acks.All,
             EnableDeliveryReports = true,
@@ -80,7 +80,7 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
         using var adminClient = new AdminClientBuilder(_sharedClientConfig.AdminClientConfig).Build();
         var existingTopics = adminClient.GetMetadata(TimeSpan.FromSeconds(10)).Topics;
 
-        foreach (string topic in _kafkaSettings.TopicList)
+        foreach (string topic in _kafkaSettings.Admin.TopicList)
         {
             if (!existingTopics.Exists(t => t.Topic.Equals(topic, StringComparison.OrdinalIgnoreCase)))
             {

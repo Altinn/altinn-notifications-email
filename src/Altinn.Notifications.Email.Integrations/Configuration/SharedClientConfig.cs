@@ -15,9 +15,14 @@ public class SharedClientConfig
     public AdminClientConfig AdminClientConfig { get; }
 
     /// <summary>
-    /// Generic client configuration to use for kafka producer and consumer 
+    /// Generic client configuration to use for kafka producer
     /// </summary>
-    public ClientConfig ClientConfig { get; }
+    public ClientConfig ProducerConfig { get; }
+
+    /// <summary>
+    /// Generic client configuration to use for kafka consumer 
+    /// </summary>
+    public ClientConfig ConsumerConfig { get; }
 
     /// <summary>
     /// TopicSpecification
@@ -34,9 +39,14 @@ public class SharedClientConfig
             BootstrapServers = kafkaSettings.BrokerAddress,
         };
 
-        var config = new ClientConfig
+        var producerConfig = new ClientConfig
         {
             BootstrapServers = kafkaSettings.BrokerAddress,
+        };
+
+        var consumerConfig = new ClientConfig
+        {
+            BootstrapServers = kafkaSettings.BrokerAddress
         };
 
         var topicSpec = new TopicSpecification()
@@ -45,26 +55,33 @@ public class SharedClientConfig
             ReplicationFactor = 1
         };
 
-        if (!string.IsNullOrEmpty(kafkaSettings.SaslUsername) && !string.IsNullOrEmpty(kafkaSettings.SaslPassword))
+        if (!string.IsNullOrEmpty(kafkaSettings.Admin.SaslUsername) && !string.IsNullOrEmpty(kafkaSettings.Admin.SaslPassword))
         {
             adminConfig.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm.Https;
             adminConfig.SecurityProtocol = SecurityProtocol.SaslSsl;
             adminConfig.SaslMechanism = SaslMechanism.Plain;
-            adminConfig.SaslUsername = kafkaSettings.SaslUsername;
-            adminConfig.SaslPassword = kafkaSettings.SaslPassword;
+            adminConfig.SaslUsername = kafkaSettings.Admin.SaslUsername;
+            adminConfig.SaslPassword = kafkaSettings.Admin.SaslPassword;
 
-            config.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm.Https;
-            config.SecurityProtocol = SecurityProtocol.SaslSsl;
-            config.SaslMechanism = SaslMechanism.Plain;
-            config.SaslUsername = kafkaSettings.SaslUsername;
-            config.SaslPassword = kafkaSettings.SaslPassword;
+            producerConfig.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm.Https;
+            producerConfig.SecurityProtocol = SecurityProtocol.SaslSsl;
+            producerConfig.SaslMechanism = SaslMechanism.Plain;
+            producerConfig.SaslUsername = kafkaSettings.Producer.SaslUsername;
+            producerConfig.SaslPassword = kafkaSettings.Producer.SaslPassword;
+
+            consumerConfig.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm.Https;
+            consumerConfig.SecurityProtocol = SecurityProtocol.SaslSsl;
+            consumerConfig.SaslMechanism = SaslMechanism.Plain;
+            consumerConfig.SaslUsername = kafkaSettings.Consumer.SaslUsername;
+            consumerConfig.SaslPassword = kafkaSettings.Consumer.SaslPassword;
 
             topicSpec.NumPartitions = 6;
             topicSpec.ReplicationFactor = 3;
         }
 
         AdminClientConfig = adminConfig;
-        ClientConfig = config;
+        ProducerConfig = producerConfig;
+        ConsumerConfig = consumerConfig;
         TopicSpecification = topicSpec;
     }
 }

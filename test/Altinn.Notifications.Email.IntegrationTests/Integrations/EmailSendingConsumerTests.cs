@@ -1,4 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core;
+using Altinn.Notifications.Email.Core.Enums;
+using Altinn.Notifications.Email.Core.Integrations.Interfaces;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;
@@ -32,14 +34,8 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         {
             BrokerAddress = "localhost:9092",
             ConsumerGroupId = "email-sending-consumer",
-            EmailSendingConsumerSettings = new()
-            {
-                TopicName = EmailSendingConsumerTopic
-            },
-            EmailSendingAcceptedProducerSettings = new()
-            {
-                TopicName = EmailSendingAcceptedProducerTopic
-            },
+            SendEmailQueueTopicName = EmailSendingConsumerTopic,
+            EmailSendingAcceptedTopicName = EmailSendingAcceptedProducerTopic,
             TopicList = new List<string> { EmailSendingConsumerTopic, EmailSendingAcceptedProducerTopic }
         };
 
@@ -47,7 +43,6 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
             .AddLogging()
             .AddSingleton(kafkaSettings)
             .AddSingleton<ICommonProducer, CommonProducer>()
-            .AddSingleton<IEmailSendingAcceptedProducer, EmailSendingAcceptedProducer>()
             .AddSingleton(_emailServiceMock)
             .AddHostedService<EmailSendingConsumer>();
 
@@ -70,7 +65,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     {
         // Arrange
         Core.Models.Email email =
-            new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", Core.Models.EmailContentType.Plain);
+            new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
         using CommonProducer kafkaProducer = GetKafkaProducer();
         using EmailSendingConsumer sut = GetEmailSendingConsumer();

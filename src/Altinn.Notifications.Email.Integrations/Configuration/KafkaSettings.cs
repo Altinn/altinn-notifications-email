@@ -23,7 +23,12 @@ public class KafkaSettings
     /// <summary>
     /// The producer settings
     /// </summary>
-    public AdminSettings Admin { get; set; } = new();  
+    public AdminSettings Admin { get; set; } = new();
+
+    /// <summary>
+    /// The name of the health check topic
+    /// </summary>
+    public string HealthCheckTopicName { get; set; } = string.Empty;
 
     /// <summary>
     /// The name of the email sending accepted topic

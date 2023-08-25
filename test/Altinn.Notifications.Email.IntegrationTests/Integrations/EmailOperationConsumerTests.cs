@@ -8,24 +8,26 @@ using Altinn.Notifications.Email.IntegrationTests.Utils;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 using Moq;
-
-using System.ComponentModel;
 
 using Xunit;
 
 namespace Altinn.Notifications.Email.IntegrationTests.Integrations
 {
-    public class EmailOperationConsumerTests : IAsyncDisposable
+    public class EmailOperationConsumerTests : IAsyncLifetime
     {
         private readonly string EmailSendingAcceptedTopicName = Guid.NewGuid().ToString();
         private readonly string EmailSendingAcceptedRetryTopicName = Guid.NewGuid().ToString();
         private ServiceProvider _serviceProvider;
         private readonly string _validTopicMessage = $"{{ \"NotificationId\": \"{Guid.NewGuid()}\", \"OperationId\" : \"operationId\" }}";
 
-        public async ValueTask DisposeAsync()
+        public async Task InitializeAsync()
+        {
+            await Task.CompletedTask;
+        }
+
+        async Task IAsyncLifetime.DisposeAsync()
         {
             await KafkaUtil.DeleteTopicAsync(EmailSendingAcceptedTopicName);
             await KafkaUtil.DeleteTopicAsync(EmailSendingAcceptedRetryTopicName);
@@ -70,26 +72,6 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
 
             // Assert
             emailServiceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Never);
-        }
-
-        [Fact]
-        public async Task ConsumeOperation_ServiceThrowsException_RetryFunctionCalled()
-        {
-            // Arrange
-            Mock<IEmailService> emailServiceMock = new();
-            emailServiceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()))
-                .ThrowsAsync(new Exception());
-
-            using EmailOperationConsumer sut = GetConsumer(emailServiceMock.Object);
-
-            // Act
-            await PopulateKafkaTopic(_validTopicMessage);
-
-            await sut.StartAsync(CancellationToken.None);
-            await Task.Delay(10000);
-            await sut.StopAsync(CancellationToken.None);
-
-            // Assert
         }
 
         private async Task PopulateKafkaTopic(string message)

@@ -84,7 +84,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.Received().SendEmail(Arg.Any<Core.Models.Email>());
+        await _emailServiceMock.Received().SendAsync(Arg.Any<Core.Models.Email>());
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.DidNotReceive().SendEmail(Arg.Any<Core.Models.Email>());
+        await _emailServiceMock.DidNotReceive().SendAsync(Arg.Any<Core.Models.Email>());
     }
 
     private EmailSendingConsumer GetEmailSendingConsumer()

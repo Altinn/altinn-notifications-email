@@ -46,7 +46,7 @@ public sealed class EmailSendingConsumer : KafkaConsumerBase<EmailSendingConsume
             return;
         }
 
-        await _emailService.SendEmail(email);
+        await _emailService.SendAsync(email);
     }
 
     private async Task RetryEmail(string message)

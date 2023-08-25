@@ -22,6 +22,25 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.TestingModels
         }
 
         [Fact]
+        public void SerializeToJson()
+        {
+            // Arrange
+            SendNotificationOperationIdentifier identifier = new()
+            {
+                NotificationId = _notificationId,
+                OperationId = "operation-identifier"
+            };
+
+            string expected = _serialiedIdentfier;
+
+            // Act
+            var actual = identifier.Serialize();
+
+            // Assert
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
         public void TryParse_ValidIdentifier_ReturnsTrue()
         {
             bool actualResult = SendNotificationOperationIdentifier.TryParse(_serialiedIdentfier, out SendNotificationOperationIdentifier actual);

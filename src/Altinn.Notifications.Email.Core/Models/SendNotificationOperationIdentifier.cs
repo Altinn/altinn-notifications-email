@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Altinn.Notifications.Email.Core.Models
 {
@@ -16,6 +17,21 @@ namespace Altinn.Notifications.Email.Core.Models
         /// The send operation id
         /// </summary>
         public string OperationId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Json serializes the <see cref="SendNotificationOperationIdentifier"/>
+        /// </summary>
+        public string Serialize()
+        {
+            return JsonSerializer.Serialize(
+                this,
+                new JsonSerializerOptions
+                {
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    Converters = { new JsonStringEnumConverter() }
+                });
+        }
 
         /// <summary>
         /// Try to parse a json string into a<see cref="SendNotificationOperationIdentifier"/>

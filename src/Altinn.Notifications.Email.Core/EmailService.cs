@@ -33,7 +33,7 @@ public class EmailService : IEmailService
     }
 
     /// <inheritdoc/>
-    public async Task SendEmail(Models.Email email)
+    public async Task SendAsync(Models.Email email)
     {
         string operationId = await _emailServiceClient.SendEmail(email);
 
@@ -43,7 +43,7 @@ public class EmailService : IEmailService
             OperationId = operationId
         };
 
-        await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, JsonSerializer.Serialize(operationIdentifier));
+        await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
     }
 
     /// <inheritdoc/>
@@ -53,7 +53,6 @@ public class EmailService : IEmailService
 
         // if a sending result, should we rather put it back on the check topic? 
 
-        // should a description be included? 
         var operationResult = new SendOperationResult()
         {
             NotificationId = operationIdentifier.NotificationId,
@@ -61,7 +60,7 @@ public class EmailService : IEmailService
             SendResult = result
         };
 
-        // should we consider including in multiple kafka topics if a certain error for instance? 
-        await _producer.ProduceAsync(_settings.EmailOperationResultTopicName, JsonSerializer.Serialize(operationResult));
+        // TODO: should we consider publishing to multiple kafka topics if a certain error for instance? 
+        await _producer.ProduceAsync(_settings.EmailOperationResultTopicName, operationResult.Serialize());
     }
 }

@@ -1,5 +1,4 @@
-﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+﻿using Altinn.Notifications.Email.Core.Integrations.Interfaces;
 using Altinn.Notifications.Email.Integrations.Clients;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;

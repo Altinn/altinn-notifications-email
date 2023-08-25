@@ -1,7 +1,7 @@
 ﻿namespace Altinn.Notifications.Email.Core.Configuration;
 
 /// <summary>
-/// Configuration object used to hold integration settings for a Kafka.
+/// Configuration object used to hold topic names for core services to publish to in Kafka.
 /// </summary>
 public class TopicSettings
 {

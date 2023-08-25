@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
-using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Enums;
+using Altinn.Notifications.Email.Core.Integrations.Interfaces;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Azure;

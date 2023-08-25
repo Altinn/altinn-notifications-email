@@ -51,7 +51,6 @@ public class EmailService : IEmailService
     {
         EmailSendResult result = await _emailServiceClient.GetOperationUpdate(operationIdentifier.OperationId);
 
-        // if a sending result, should we rather put it back on the check topic? 
         var operationResult = new SendOperationResult()
         {
             NotificationId = operationIdentifier.NotificationId,
@@ -59,7 +58,6 @@ public class EmailService : IEmailService
             SendResult = result
         };
 
-        // TODO: should we consider publishing to multiple kafka topics if a certain error for instance? 
         await _producer.ProduceAsync(_settings.EmailOperationResultTopicName, operationResult.Serialize());
     }
 }

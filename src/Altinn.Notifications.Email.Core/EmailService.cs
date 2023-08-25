@@ -52,7 +52,6 @@ public class EmailService : IEmailService
         EmailSendResult result = await _emailServiceClient.GetOperationUpdate(operationIdentifier.OperationId);
 
         // if a sending result, should we rather put it back on the check topic? 
-
         var operationResult = new SendOperationResult()
         {
             NotificationId = operationIdentifier.NotificationId,

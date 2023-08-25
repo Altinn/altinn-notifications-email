@@ -19,7 +19,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
     {
         private readonly string EmailSendingAcceptedTopicName = Guid.NewGuid().ToString();
         private readonly string EmailSendingAcceptedRetryTopicName = Guid.NewGuid().ToString();
-        private ServiceProvider _serviceProvider;
+        private ServiceProvider? _serviceProvider;
         private readonly string _validTopicMessage = $"{{ \"NotificationId\": \"{Guid.NewGuid()}\", \"OperationId\" : \"operationId\" }}";
 
         public async Task InitializeAsync()
@@ -76,6 +76,10 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
 
         private async Task PopulateKafkaTopic(string message)
         {
+            if (_serviceProvider == null)
+            {
+                Assert.Fail("Unable to populate kafka topic. _serviceProvider is null.");
+            }
             using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
             await kafkaProducer.ProduceAsync(EmailSendingAcceptedTopicName, message);
         }

@@ -14,7 +14,7 @@ public class EmailTests
         Guid id = Guid.NewGuid();
         _serializedEmail = new JsonObject()
         {
-            { "id", id },
+            { "notificationId", id },
             { "subject", "subject" },
             { "body", "body" },
             { "fromAddress", "from@domain.com" },

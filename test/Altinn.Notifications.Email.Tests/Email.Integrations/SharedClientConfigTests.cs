@@ -30,7 +30,7 @@ public class SharedClientConfigTests
         {
             Assert.Equal(6, config.TopicSpecification.NumPartitions);
             Assert.NotNull(config.AdminClientConfig.SaslMechanism);
-            Assert.Equal("username", config.ProducerConfig.SaslUsername);
+            Assert.Equal("username", config.AdminClientConfig.SaslUsername);
         }
         else
         {

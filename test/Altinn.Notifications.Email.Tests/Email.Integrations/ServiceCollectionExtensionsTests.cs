@@ -12,6 +12,9 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddIntegrationServices_KafkaSettingsMissing_ThrowsException()
     {
+        // Arrange
+        string expectedExceptionMessage = "Required Kafka settings is missing from application configuration (Parameter 'config')";
+
         Environment.SetEnvironmentVariable("KafkaSettings__ConsumerGroupId", null);
         Environment.SetEnvironmentVariable("CommunicationServicesSettings__Connectionstring", "value");
 
@@ -19,12 +22,19 @@ public class ServiceCollectionExtensionsTests
 
         IServiceCollection services = new ServiceCollection();
 
-        Assert.Throws<ArgumentNullException>(() => services.AddIntegrationServices(config));
+        // Act
+        var exception = Assert.Throws<ArgumentNullException>(() => services.AddIntegrationServices(config));
+
+        // Assert
+        Assert.Equal(expectedExceptionMessage, exception.Message);
     }
 
     [Fact]
     public void AddIntegrationServicess_NotificationOrderConfigMissing_ThrowsException()
     {
+        // Arrange
+        string expectedExceptionMessage = "Required communication services settings is missing from application configuration (Parameter 'config')";
+
         Environment.SetEnvironmentVariable("KafkaSettings__ConsumerGroupId", "value");
         Environment.SetEnvironmentVariable("CommunicationServicesSettings__Connectionstring", null);
 
@@ -32,6 +42,10 @@ public class ServiceCollectionExtensionsTests
 
         IServiceCollection services = new ServiceCollection();
 
-        Assert.Throws<ArgumentNullException>(() => services.AddIntegrationServices(config));
+        // Act
+        var exception = Assert.Throws<ArgumentNullException>(() => services.AddIntegrationServices(config));
+
+        // Assert
+        Assert.Equal(expectedExceptionMessage, exception.Message);
     }
 }

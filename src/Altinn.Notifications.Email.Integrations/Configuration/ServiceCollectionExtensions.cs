@@ -26,14 +26,14 @@ public static class ServiceCollectionExtensions
 
         if (kafkaSettings == null)
         {
-            throw new ArgumentNullException(nameof(config), "Required KafkaSettings is missing from application configuration");
+            throw new ArgumentNullException(nameof(config), "Required Kafka settings is missing from application configuration");
         }
 
         CommunicationServicesSettings communicationServicesSettings = config!.GetSection(nameof(CommunicationServicesSettings)).Get<CommunicationServicesSettings>()!;
 
         if (communicationServicesSettings == null)
         {
-            throw new ArgumentNullException(nameof(config), "Required CommunicationServicesSettings is missing from application configuration");
+            throw new ArgumentNullException(nameof(config), "Required communication services settings is missing from application configuration");
         }
 
         services

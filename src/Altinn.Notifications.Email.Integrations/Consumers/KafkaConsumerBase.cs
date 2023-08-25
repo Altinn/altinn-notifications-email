@@ -13,7 +13,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers;
 public abstract class KafkaConsumerBase<T> : BackgroundService
     where T : class
 {
-    private readonly ILogger<T> _logger;
+    private readonly ILogger<KafkaConsumerBase<T>> _logger;
     private readonly IConsumer<string, string> _consumer;
     private readonly string _topicName;
 
@@ -22,7 +22,7 @@ public abstract class KafkaConsumerBase<T> : BackgroundService
     /// </summary>
     protected KafkaConsumerBase(
            KafkaSettings settings,
-           ILogger<T> logger,
+           ILogger<KafkaConsumerBase<T>> logger,
            string topicName)
     {
         _logger = logger;

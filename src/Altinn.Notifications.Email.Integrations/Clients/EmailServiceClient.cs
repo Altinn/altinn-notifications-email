@@ -1,4 +1,6 @@
-﻿using Altinn.Notifications.Email.Core;
+﻿using System.Diagnostics.CodeAnalysis;
+
+using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Enums;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
@@ -11,6 +13,7 @@ namespace Altinn.Notifications.Email.Integrations.Clients;
 /// Represents an implementation of <see cref="IEmailServiceClient"/> that will use Azure Communication
 /// Services to produce an email.
 /// </summary>
+[ExcludeFromCodeCoverage]
 public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;

@@ -31,7 +31,7 @@ public sealed class EmailOperationConsumer : KafkaConsumerBase<EmailOperationCon
     {
         _emailService = emailService;
         _producer = producer;
-        _retryTopicName = kafkaSettings.EmailSendingAcceptedTopicName;
+        _retryTopicName = kafkaSettings.EmailSendingAcceptedRetryTopicName;
     }
 
     /// <inheritdoc/>

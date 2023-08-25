@@ -16,12 +16,12 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
     private readonly IProducer<Null, string> _producer;
     private readonly KafkaSettings _kafkaSettings;
     private readonly SharedClientConfig _sharedClientConfig;
-    private readonly ILogger<CommonProducer> _logger;
+    private readonly ILogger<ICommonProducer> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ICommonProducer"/> class.
     /// </summary>
-    public CommonProducer(KafkaSettings kafkaSettings, ILogger<CommonProducer> logger)
+    public CommonProducer(KafkaSettings kafkaSettings, ILogger<ICommonProducer> logger)
     {
         _kafkaSettings = kafkaSettings;
         _logger = logger;

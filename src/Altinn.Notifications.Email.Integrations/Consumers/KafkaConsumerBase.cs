@@ -81,7 +81,8 @@ public abstract class KafkaConsumerBase<T> : BackgroundService
                 consumeResult = _consumer.Consume(stoppingToken);
                 if (consumeResult != null)
                 {
-                    await processMessageFunc(consumeResult.Message.Value);
+                    message = consumeResult.Message.Value;
+                    await processMessageFunc(message);
                     _consumer.Commit(consumeResult);
                     _consumer.StoreOffset(consumeResult);
                 }
@@ -94,7 +95,7 @@ public abstract class KafkaConsumerBase<T> : BackgroundService
             {
                 await retryMessageFunc(message!);
 
-                _logger.LogError(ex, "// {Class} // ConsumeOrder // An error occurred while consuming messages", GetType().Name);
+                _logger.LogError(ex, "// {Class} // ConsumeMessage // An error occurred while consuming messages", GetType().Name);
                 if (consumeResult != null)
                 {
                     _consumer.Commit(consumeResult);

@@ -33,10 +33,16 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         var kafkaSettings = new KafkaSettings
         {
             BrokerAddress = "localhost:9092",
-            ConsumerGroupId = "email-sending-consumer",
+            Consumer = new()
+            {
+                GroupId = "email-sending-consumer"
+            },
             SendEmailQueueTopicName = EmailSendingConsumerTopic,
             EmailSendingAcceptedTopicName = EmailSendingAcceptedProducerTopic,
-            TopicList = new List<string> { EmailSendingConsumerTopic, EmailSendingAcceptedProducerTopic }
+            Admin = new()
+            {
+                TopicList = new List<string> { EmailSendingConsumerTopic, EmailSendingAcceptedProducerTopic }
+            }
         };
 
         IServiceCollection services = new ServiceCollection()
@@ -67,7 +73,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         Core.Models.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
-        using CommonProducer kafkaProducer = GetKafkaProducer();
+        using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
         using EmailSendingConsumer sut = GetEmailSendingConsumer();
 
         // Act
@@ -85,7 +91,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     public async Task ConsumeEmailTest_Deserialization_of_message_fails_Never_calls_service()
     {
         // Arrange
-        using CommonProducer kafkaProducer = GetKafkaProducer();
+        using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
         using EmailSendingConsumer sut = GetEmailSendingConsumer();
 
         // Act
@@ -109,17 +115,5 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         }
 
         return emailSendingConsumer;
-    }
-
-    private CommonProducer GetKafkaProducer()
-    {
-        var kafkaProducer = _serviceProvider.GetService(typeof(ICommonProducer)) as CommonProducer;
-
-        if (kafkaProducer == null)
-        {
-            Assert.Fail("Unable to create an instance of KafkaProducer.");
-        }
-
-        return kafkaProducer;
     }
 }

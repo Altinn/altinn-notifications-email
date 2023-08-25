@@ -1,5 +1,12 @@
-﻿using Confluent.Kafka;
+﻿using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+using Altinn.Notifications.Email.Integrations.Producers;
+
+using Confluent.Kafka;
 using Confluent.Kafka.Admin;
+
+using Microsoft.Extensions.DependencyInjection;
+
+using Xunit;
 
 namespace Altinn.Notifications.Email.IntegrationTests.Utils;
 
@@ -26,5 +33,17 @@ public static class KafkaUtil
                 ReplicationFactor = 1 // Set the desired replication factor
             }
         });
+    }
+
+    public static CommonProducer GetKafkaProducer(ServiceProvider serviceProvider)
+    {
+        var kafkaProducer = serviceProvider.GetService(typeof(ICommonProducer)) as CommonProducer;
+
+        if (kafkaProducer == null)
+        {
+            Assert.Fail("Unable to create an instance of KafkaProducer.");
+        }
+
+        return kafkaProducer;
     }
 }

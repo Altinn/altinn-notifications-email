@@ -25,6 +25,10 @@
     </AdditionalFiles>
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Sending\" />
+  </ItemGroup>
+
   <PropertyGroup Condition="'$(Configuration)'=='Debug'">
     <CodeAnalysisRuleSet>..\..\Altinn3.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>

@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-
-using Altinn.Notifications.Email.Core.Enums;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Azure;
@@ -57,7 +56,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// Check the email sending operation status
     /// </summary>
     /// <returns></returns>
-    public async Task<Core.Enums.EmailSendResult> GetOperationUpdate(string operationId)
+    public async Task<Core.Models.EmailSendResult> GetOperationUpdate(string operationId)
     {
         var operation = new EmailSendOperation(operationId, _emailClient);
         await operation.UpdateStatusAsync();
@@ -65,7 +64,7 @@ public class EmailServiceClient : IEmailServiceClient
         {
             if (operation.Value.Status == EmailSendStatus.Succeeded)
             {
-                return Core.Enums.EmailSendResult.Succeeded;
+                return Core.Models.EmailSendResult.Succeeded;
             }
             else if (operation.Value.Status == EmailSendStatus.Failed || operation.Value.Status == EmailSendStatus.Canceled)
             {
@@ -73,10 +72,10 @@ public class EmailServiceClient : IEmailServiceClient
 
                 // TODO: check the reasons for failure to create reasonable types
                 Console.WriteLine(response.ReasonPhrase);
-                return Core.Enums.EmailSendResult.Failed;
+                return Core.Models.EmailSendResult.Failed;
             }
         }
 
-        return Core.Enums.EmailSendResult.Sending;
+        return Core.Models.EmailSendResult.Sending;
     }
 }

@@ -1,6 +1,6 @@
-﻿using Altinn.Notifications.Email.Core.Enums;
+﻿using Altinn.Notifications.Email.Core.Models;
 
-namespace Altinn.Notifications.Email.Core.Integrations.Interfaces;
+namespace Altinn.Notifications.Email.Core.Dependencies;
 
 /// <summary>
 /// Describes the public interface of a client able to send email requests to some mailing service.

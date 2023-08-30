@@ -1,7 +1,5 @@
 ﻿using System.Text.Json.Nodes;
-
-using Altinn.Notifications.Email.Core.Enums;
-
+using Altinn.Notifications.Email.Core.Models;
 using Xunit;
 
 namespace Altinn.Notifications.Tests.Notifications.Core.TestingModels;

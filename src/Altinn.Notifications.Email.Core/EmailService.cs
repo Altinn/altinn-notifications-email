@@ -1,8 +1,5 @@
-﻿using System.Text.Json;
-
-using Altinn.Notifications.Email.Core.Configuration;
-using Altinn.Notifications.Email.Core.Enums;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+﻿using Altinn.Notifications.Email.Core.Configuration;
+using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Models;
 
 namespace Altinn.Notifications.Email.Core;
@@ -58,6 +55,13 @@ public class EmailService : IEmailService
             SendResult = result
         };
 
-        await _producer.ProduceAsync(_settings.EmailOperationResultTopicName, operationResult.Serialize());
+        if (result != EmailSendResult.Sending)
+        {
+            await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
+        }
+        else
+        {
+            await _producer.ProduceAsync(_settings.EmailSendingAcceptedRetryTopicName, operationIdentifier.Serialize());
+        }
     }
 }

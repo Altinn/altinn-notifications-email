@@ -18,7 +18,7 @@ public class TopicSettings
     public string EmailSendingAcceptedRetryTopicName { get; set; } = string.Empty;
     
     /// <summary>
-    /// The name of the email operation result topic
+    /// The name of the email status updated topic
     /// </summary>    
-    public string EmailOperationResultTopicName { get; set; } = string.Empty;
+    public string EmailStatusUpdatedTopicName { get; set; } = string.Empty;
 }

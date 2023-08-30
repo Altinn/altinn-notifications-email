@@ -1,5 +1,4 @@
-﻿using Altinn.Notifications.Email.Core.Enums;
-using Altinn.Notifications.Email.Core.Models;
+﻿using Altinn.Notifications.Email.Core.Models;
 
 using System.Text.Json.Nodes;
 

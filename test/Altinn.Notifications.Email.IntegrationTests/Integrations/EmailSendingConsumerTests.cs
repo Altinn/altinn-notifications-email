@@ -1,6 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Enums;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;

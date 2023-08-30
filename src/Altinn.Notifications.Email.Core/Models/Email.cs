@@ -1,8 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using Altinn.Notifications.Email.Core.Enums;
-
 namespace Altinn.Notifications.Email.Core.Models;
 
 /// <summary>

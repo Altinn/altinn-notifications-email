@@ -1,7 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Configuration;
-using Altinn.Notifications.Email.Core.Enums;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Models;
 
 using Moq;
@@ -18,9 +17,9 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.TestingServices
         {
             _topicSettings = new()
             {
-                EmailOperationResultTopicName = "EmailOperationResultTopic",
-                EmailSendingAcceptedTopicName = "EmailSendingAcceptedTopic",
-                EmailSendingAcceptedRetryTopicName = "EmailSendingAcceptedRetryTopic"
+                EmailStatusUpdatedTopicName = "EmailStatusUpdatedTopicName",
+                EmailSendingAcceptedTopicName = "EmailSendingAcceptedTopicName",
+                EmailSendingAcceptedRetryTopicName = "EmailSendingAcceptedRetryTopicName"
             };
         }
 
@@ -38,7 +37,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.TestingServices
 
             Mock<ICommonProducer> producerMock = new();
             producerMock.Setup(p => p.ProduceAsync(
-                It.Is<string>(s => s.Equals("EmailSendingAcceptedTopic")),
+                It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailSendingAcceptedTopicName))),
                 It.Is<string>(s =>
                 s.Contains("\"operationId\":\"operation-id\"") &&
                 s.Contains($"\"notificationId\":\"{id}\""))));
@@ -69,7 +68,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.TestingServices
 
             Mock<ICommonProducer> producerMock = new();
             producerMock.Setup(p => p.ProduceAsync(
-                It.Is<string>(s => s.Equals("EmailOperationResultTopic")),
+                It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailStatusUpdatedTopicName))),
                 It.Is<string>(s =>
                 s.Contains("\"operationId\":\"operation-id\"") &&
                   s.Contains("\"sendResult\":\"Delivered\"") &&

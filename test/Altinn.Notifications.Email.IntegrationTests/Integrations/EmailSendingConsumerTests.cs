@@ -1,6 +1,5 @@
-﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
+﻿using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;
@@ -22,13 +21,13 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     private readonly string EmailSendingConsumerTopic = Guid.NewGuid().ToString();
     private readonly string EmailSendingAcceptedProducerTopic = Guid.NewGuid().ToString();
 
-    private readonly IEmailService _emailServiceMock;
+    private readonly ISendingService _emailServiceMock;
 
     private readonly ServiceProvider _serviceProvider;
 
     public EmailSendingConsumerTests()
     {
-        _emailServiceMock = Substitute.For<IEmailService>();
+        _emailServiceMock = Substitute.For<ISendingService>();
 
         var kafkaSettings = new KafkaSettings
         {
@@ -70,7 +69,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     public async Task ConsumeEmailTest_Successfull_deserialization_of_message_Service_called_once()
     {
         // Arrange
-        Core.Models.Email email =
+        Core.Sending.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
         using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
@@ -84,7 +83,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.Received().SendAsync(Arg.Any<Core.Models.Email>());
+        await _emailServiceMock.Received().SendAsync(Arg.Any<Core.Sending.Email>());
     }
 
     [Fact]
@@ -102,7 +101,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.DidNotReceive().SendAsync(Arg.Any<Core.Models.Email>());
+        await _emailServiceMock.DidNotReceive().SendAsync(Arg.Any<Core.Sending.Email>());
     }
 
     private EmailSendingConsumer GetEmailSendingConsumer()

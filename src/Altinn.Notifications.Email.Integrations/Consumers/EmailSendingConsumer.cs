@@ -1,5 +1,5 @@
-﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Dependencies;
+﻿using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Integrations.Kafka.Consumers;
 
@@ -12,7 +12,7 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// </summary>
 public sealed class EmailSendingConsumer : KafkaConsumerBase<EmailSendingConsumer>
 {
-    private readonly IEmailService _emailService;
+    private readonly ISendingService _emailService;
     private readonly ICommonProducer _producer;
     private readonly string _retryTopicName;
 
@@ -21,7 +21,7 @@ public sealed class EmailSendingConsumer : KafkaConsumerBase<EmailSendingConsume
     /// </summary>
     public EmailSendingConsumer(
         KafkaSettings kafkaSettings,
-        IEmailService emailService,
+        ISendingService emailService,
         ICommonProducer producer,
         ILogger<EmailSendingConsumer> logger)
         : base(kafkaSettings, logger, kafkaSettings.SendEmailQueueTopicName)
@@ -39,7 +39,7 @@ public sealed class EmailSendingConsumer : KafkaConsumerBase<EmailSendingConsume
 
     private async Task ConsumeEmail(string message)
     {
-        bool succeeded = Core.Models.Email.TryParse(message, out Core.Models.Email email);
+        bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
 
         if (!succeeded)
         {

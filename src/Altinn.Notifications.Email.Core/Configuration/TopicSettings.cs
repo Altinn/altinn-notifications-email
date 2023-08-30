@@ -8,13 +8,11 @@ public class TopicSettings
     /// <summary>
     /// The name of the email sending accepted topic
     /// </summary>
-    /// Todo: Consider renaming, content on topic is operation id and notifications. e.g. NewOprationsTopic? 
     public string EmailSendingAcceptedTopicName { get; set; } = string.Empty;
 
     /// <summary>
     /// The name of the email sending accepted retry topic
     /// </summary>
-    /// Todo: Consider renaming, content on topic is operation id and notifications. e.g. NewOprationsTopic? 
     public string EmailSendingAcceptedRetryTopicName { get; set; } = string.Empty;
     
     /// <summary>

@@ -1,6 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Integrations.Kafka.Consumers;
 
@@ -15,7 +15,7 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// </summary>
 public sealed class EmailOperationConsumer : KafkaConsumerBase<EmailOperationConsumer>
 {
-    private readonly IEmailService _emailService;
+    private readonly IStatusService _statusService;
     private readonly ICommonProducer _producer;
     private readonly string _retryTopicName;
 
@@ -23,13 +23,13 @@ public sealed class EmailOperationConsumer : KafkaConsumerBase<EmailOperationCon
     /// Initializes a new instance of the <see cref="EmailOperationConsumer"/> class.
     /// </summary>
     public EmailOperationConsumer(
-        IEmailService emailService,
+        IStatusService statusService,
         ICommonProducer producer,
         KafkaSettings kafkaSettings,
         ILogger<EmailOperationConsumer> logger)
         : base(kafkaSettings, logger, kafkaSettings.EmailSendingAcceptedTopicName)
     {
-        _emailService = emailService;
+        _statusService = statusService;
         _producer = producer;
         _retryTopicName = kafkaSettings.EmailSendingAcceptedRetryTopicName;
     }
@@ -49,7 +49,7 @@ public sealed class EmailOperationConsumer : KafkaConsumerBase<EmailOperationCon
             return;
         }
 
-        await _emailService.UpdateSendStatus(operationIdentifier);
+        await _statusService.UpdateSendStatus(operationIdentifier);
     }
 
     private async Task RetryOperation(string message)

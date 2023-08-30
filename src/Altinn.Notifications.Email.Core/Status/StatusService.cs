@@ -1,25 +1,25 @@
 ﻿using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
+using Altinn.Notifications.Email.Core.Status;
 
 namespace Altinn.Notifications.Email.Core;
 
 /// <summary>
-/// A service implementation of the <see cref="IEmailService"/> class
+/// A service implementation of the <see cref="IStatusService"/> class
 /// </summary>
-public class EmailService : IEmailService
+public class StatusService : IStatusService
 {
     private readonly IEmailServiceClient _emailServiceClient;
     private readonly TopicSettings _settings;
     private readonly ICommonProducer _producer;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="EmailService"/> class.
+    /// Initializes a new instance of the <see cref="StatusService"/> class.
     /// </summary>
     /// <param name="emailServiceClient">A client that can perform actual mail sending.</param>
     /// <param name="producer">A kafka producer.</param>
     /// <param name="settings">The topic settings.</param>
-    public EmailService(
+    public StatusService(
         IEmailServiceClient emailServiceClient,
         ICommonProducer producer,
         TopicSettings settings)
@@ -27,20 +27,6 @@ public class EmailService : IEmailService
         _emailServiceClient = emailServiceClient;
         _producer = producer;
         _settings = settings;
-    }
-
-    /// <inheritdoc/>
-    public async Task SendAsync(Models.Email email)
-    {
-        string operationId = await _emailServiceClient.SendEmail(email);
-
-        var operationIdentifier = new SendNotificationOperationIdentifier()
-        {
-            NotificationId = email.NotificationId,
-            OperationId = operationId
-        };
-
-        await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
     }
 
     /// <inheritdoc/>

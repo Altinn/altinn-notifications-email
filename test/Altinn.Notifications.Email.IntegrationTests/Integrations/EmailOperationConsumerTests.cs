@@ -1,6 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;
@@ -37,10 +37,10 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
         public async Task ConsumeOperation_ValidOperation_ServiceCalledOnce()
         {
             // Arrange
-            Mock<IEmailService> emailServiceMock = new();
-            emailServiceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
+            Mock<IStatusService> serviceMock = new();
+            serviceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
 
-            using EmailOperationConsumer sut = GetConsumer(emailServiceMock.Object);
+            using EmailOperationConsumer sut = GetConsumer(serviceMock.Object);
 
             // Act
             await PopulateKafkaTopic(_validTopicMessage);
@@ -50,7 +50,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             await sut.StopAsync(CancellationToken.None);
 
             // Assert
-            emailServiceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Once);
+            serviceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Once);
         }
 
 
@@ -58,10 +58,10 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
         public async Task ConsumeOperation_DeserialisationFails_ServiceIsNotCalled()
         {
             // Arrange
-            Mock<IEmailService> emailServiceMock = new();
-            emailServiceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
+            Mock<IStatusService> serviceMock = new();
+            serviceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
 
-            using EmailOperationConsumer sut = GetConsumer(emailServiceMock.Object);
+            using EmailOperationConsumer sut = GetConsumer(serviceMock.Object);
 
             // Act
             await PopulateKafkaTopic("{\"key\":\"value\"}");
@@ -71,7 +71,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             await sut.StopAsync(CancellationToken.None);
 
             // Assert
-            emailServiceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Never);
+            serviceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Never);
         }
 
         private async Task PopulateKafkaTopic(string message)
@@ -84,13 +84,13 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             await kafkaProducer.ProduceAsync(EmailSendingAcceptedTopicName, message);
         }
 
-        private EmailOperationConsumer GetConsumer(IEmailService? emailService = null)
+        private EmailOperationConsumer GetConsumer(IStatusService? statusService = null)
         {
-            if (emailService == null)
+            if (statusService == null)
             {
-                Mock<IEmailService> mock = new();
+                Mock<IStatusService> mock = new();
                 mock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
-                emailService = mock.Object;
+                statusService = mock.Object;
             }
 
             var kafkaSettings = new KafkaSettings
@@ -112,7 +112,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
                 .AddLogging()
                 .AddSingleton(kafkaSettings)
                 .AddSingleton<ICommonProducer, CommonProducer>()
-                .AddSingleton(emailService)
+                .AddSingleton(statusService)
                 .AddHostedService<EmailOperationConsumer>();
 
             _serviceProvider = services.BuildServiceProvider();

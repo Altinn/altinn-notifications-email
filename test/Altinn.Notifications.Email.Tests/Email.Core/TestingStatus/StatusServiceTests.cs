@@ -1,54 +1,25 @@
 ﻿using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
-
+using Altinn.Notifications.Email.Core.Sending;
+using Altinn.Notifications.Email.Core.Status;
 using Moq;
 
 using Xunit;
 
-namespace Altinn.Notifications.Email.Tests.Email.Core.TestingServices
+namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
 {
-    public class EmailServiceTests
+    public class StatusServiceTests
     {
         private readonly TopicSettings _topicSettings;
 
-        public EmailServiceTests()
+        public StatusServiceTests()
         {
             _topicSettings = new()
             {
                 EmailStatusUpdatedTopicName = "EmailStatusUpdatedTopicName",
-                EmailSendingAcceptedTopicName = "EmailSendingAcceptedTopicName",
                 EmailSendingAcceptedRetryTopicName = "EmailSendingAcceptedRetryTopicName"
             };
-        }
-
-        [Fact]
-        public async Task SendAsync_OperationIdentifierGenerated_PublishedToExpectedKafkaTopic()
-        {
-            // Arrange
-            Guid id = Guid.NewGuid();
-            Notifications.Email.Core.Models.Email email =
-            new(id, "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
-
-            Mock<IEmailServiceClient> clientMock = new();
-            clientMock.Setup(c => c.SendEmail(It.IsAny<Notifications.Email.Core.Models.Email>()))
-                .ReturnsAsync("operation-id");
-
-            Mock<ICommonProducer> producerMock = new();
-            producerMock.Setup(p => p.ProduceAsync(
-                It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailSendingAcceptedTopicName))),
-                It.Is<string>(s =>
-                s.Contains("\"operationId\":\"operation-id\"") &&
-                s.Contains($"\"notificationId\":\"{id}\""))));
-
-            var sut = new EmailService(clientMock.Object, producerMock.Object, _topicSettings);
-
-            // Act
-            await sut.SendAsync(email);
-
-            // Assert
-            producerMock.VerifyAll();
         }
 
         [Fact]
@@ -74,7 +45,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.TestingServices
                   s.Contains("\"sendResult\":\"Delivered\"") &&
                 s.Contains($"\"notificationId\":\"{id}\""))));
 
-            var sut = new EmailService(clientMock.Object, producerMock.Object, _topicSettings);
+            var sut = new StatusService(clientMock.Object, producerMock.Object, _topicSettings);
 
             // Act
             await sut.UpdateSendStatus(identifier);

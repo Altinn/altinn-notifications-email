@@ -1,6 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Azure;
@@ -31,7 +31,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// </summary>
     /// <param name="email">The email</param>
     /// <returns>A Task representing the asyncrhonous operation.</returns>
-    public async Task<string> SendEmail(Core.Models.Email email)
+    public async Task<string> SendEmail(Core.Sending.Email email)
     {
         EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
@@ -56,7 +56,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// Check the email sending operation status
     /// </summary>
     /// <returns></returns>
-    public async Task<Core.Models.EmailSendResult> GetOperationUpdate(string operationId)
+    public async Task<Core.Status.EmailSendResult> GetOperationUpdate(string operationId)
     {
         var operation = new EmailSendOperation(operationId, _emailClient);
         await operation.UpdateStatusAsync();
@@ -64,7 +64,7 @@ public class EmailServiceClient : IEmailServiceClient
         {
             if (operation.Value.Status == EmailSendStatus.Succeeded)
             {
-                return Core.Models.EmailSendResult.Succeeded;
+                return Core.Status.EmailSendResult.Succeeded;
             }
             else if (operation.Value.Status == EmailSendStatus.Failed || operation.Value.Status == EmailSendStatus.Canceled)
             {
@@ -72,10 +72,10 @@ public class EmailServiceClient : IEmailServiceClient
 
                 // TODO: check the reasons for failure to create reasonable types
                 Console.WriteLine(response.ReasonPhrase);
-                return Core.Models.EmailSendResult.Failed;
+                return Core.Status.EmailSendResult.Failed;
             }
         }
 
-        return Core.Models.EmailSendResult.Sending;
+        return Core.Status.EmailSendResult.Sending;
     }
 }

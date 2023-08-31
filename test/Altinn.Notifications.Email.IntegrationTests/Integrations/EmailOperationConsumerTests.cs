@@ -40,7 +40,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             Mock<IStatusService> serviceMock = new();
             serviceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
 
-            using EmailOperationConsumer sut = GetConsumer(serviceMock.Object);
+            using EmailSendingAcceptedConsumer sut = GetConsumer(serviceMock.Object);
 
             // Act
             await PopulateKafkaTopic(_validTopicMessage);
@@ -61,7 +61,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             Mock<IStatusService> serviceMock = new();
             serviceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
 
-            using EmailOperationConsumer sut = GetConsumer(serviceMock.Object);
+            using EmailSendingAcceptedConsumer sut = GetConsumer(serviceMock.Object);
 
             // Act
             await PopulateKafkaTopic("{\"key\":\"value\"}");
@@ -84,7 +84,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             await kafkaProducer.ProduceAsync(EmailSendingAcceptedTopicName, message);
         }
 
-        private EmailOperationConsumer GetConsumer(IStatusService? statusService = null)
+        private EmailSendingAcceptedConsumer GetConsumer(IStatusService? statusService = null)
         {
             if (statusService == null)
             {
@@ -113,11 +113,11 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
                 .AddSingleton(kafkaSettings)
                 .AddSingleton<ICommonProducer, CommonProducer>()
                 .AddSingleton(statusService)
-                .AddHostedService<EmailOperationConsumer>();
+                .AddHostedService<EmailSendingAcceptedConsumer>();
 
             _serviceProvider = services.BuildServiceProvider();
 
-            var emailOperationConsumer = _serviceProvider.GetService(typeof(IHostedService)) as EmailOperationConsumer;
+            var emailOperationConsumer = _serviceProvider.GetService(typeof(IHostedService)) as EmailSendingAcceptedConsumer;
 
             if (emailOperationConsumer == null)
             {

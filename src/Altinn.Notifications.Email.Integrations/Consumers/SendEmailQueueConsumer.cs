@@ -10,25 +10,25 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// <summary>
 /// Kafka consumer class for handling the email queue.
 /// </summary>
-public sealed class EmailSendingConsumer : KafkaConsumerBase<EmailSendingConsumer>
+public sealed class SendEmailQueueConsumer : KafkaConsumerBase<SendEmailQueueConsumer>
 {
     private readonly ISendingService _emailService;
     private readonly ICommonProducer _producer;
     private readonly string _retryTopicName;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="EmailSendingConsumer"/> class.
+    /// Initializes a new instance of the <see cref="SendEmailQueueConsumer"/> class.
     /// </summary>
-    public EmailSendingConsumer(
+    public SendEmailQueueConsumer(
         KafkaSettings kafkaSettings,
         ISendingService emailService,
         ICommonProducer producer,
-        ILogger<EmailSendingConsumer> logger)
+        ILogger<SendEmailQueueConsumer> logger)
         : base(kafkaSettings, logger, kafkaSettings.SendEmailQueueTopicName)
     {
         _emailService = emailService;
         _producer = producer;
-        _retryTopicName = kafkaSettings.SendEmailQueueTopicName;
+        _retryTopicName = kafkaSettings.SendEmailQueueRetryTopicName;
     }
 
     /// <inheritdoc/>
@@ -51,7 +51,6 @@ public sealed class EmailSendingConsumer : KafkaConsumerBase<EmailSendingConsume
 
     private async Task RetryEmail(string message)
     {
-        // TODO: create seperate retry topic 
         await _producer.ProduceAsync(_retryTopicName, message);
     }
 }

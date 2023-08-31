@@ -34,15 +34,15 @@ public class StatusService : IStatusService
     {
         EmailSendResult result = await _emailServiceClient.GetOperationUpdate(operationIdentifier.OperationId);
 
-        var operationResult = new SendOperationResult()
-        {
-            NotificationId = operationIdentifier.NotificationId,
-            OperationId = operationIdentifier.OperationId,
-            SendResult = result
-        };
-
         if (result != EmailSendResult.Sending)
         {
+            var operationResult = new SendOperationResult()
+            {
+                NotificationId = operationIdentifier.NotificationId,
+                OperationId = operationIdentifier.OperationId,
+                SendResult = result
+            };
+
             await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
         }
         else

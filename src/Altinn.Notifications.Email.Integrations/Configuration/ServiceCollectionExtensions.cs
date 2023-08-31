@@ -38,8 +38,8 @@ public static class ServiceCollectionExtensions
         services
             .AddSingleton<IEmailServiceClient, EmailServiceClient>()
             .AddSingleton<ICommonProducer, CommonProducer>()
-            .AddHostedService<EmailSendingConsumer>()
-            .AddHostedService<EmailOperationConsumer>()
+            .AddHostedService<SendEmailQueueConsumer>()
+            .AddHostedService<EmailSendingAcceptedConsumer>()
             .AddSingleton(kafkaSettings)
             .AddSingleton(communicationServicesSettings);
         return services;

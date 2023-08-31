@@ -19,4 +19,9 @@ public class TopicSettings
     /// The name of the email status updated topic
     /// </summary>    
     public string EmailStatusUpdatedTopicName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The name of the send email queue retry  topic
+    /// </summary>    
+    public string SendEmailQueueRetryTopicName { get; set; } = string.Empty;
 }

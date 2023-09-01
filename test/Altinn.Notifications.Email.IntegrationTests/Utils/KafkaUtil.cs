@@ -1,4 +1,4 @@
-﻿using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+﻿using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Integrations.Producers;
 
 using Confluent.Kafka;

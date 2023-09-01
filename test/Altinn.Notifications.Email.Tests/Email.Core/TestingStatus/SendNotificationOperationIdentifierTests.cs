@@ -1,10 +1,9 @@
-﻿using Altinn.Notifications.Email.Core.Models;
-
+﻿using Altinn.Notifications.Email.Core;
 using System.Text.Json.Nodes;
 
 using Xunit;
 
-namespace Altinn.Notifications.Email.Tests.Email.Core.TestingModels
+namespace Altinn.Notifications.Email.Tests.Email.Core.Status
 {
     public class SendNotificationOperationIdentifierTests
     {

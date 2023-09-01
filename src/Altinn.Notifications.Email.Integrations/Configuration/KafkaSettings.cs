@@ -44,6 +44,11 @@ public class KafkaSettings
     /// The name of the send email queue topic
     /// </summary>
     public string SendEmailQueueTopicName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The name of the send email queue retry  topic
+    /// </summary>    
+    public string SendEmailQueueRetryTopicName { get; set; } = string.Empty;
 }
 
 /// <summary>

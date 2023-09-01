@@ -1,10 +1,7 @@
 ﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
-using Altinn.Notifications.Email.Core.Models;
+using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Integrations.Kafka.Consumers;
-
-using Confluent.Kafka;
 
 using Microsoft.Extensions.Logging;
 
@@ -13,23 +10,23 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// <summary>
 /// Kafka consumer class for handling the email queue.
 /// </summary>
-public sealed class EmailOperationConsumer : KafkaConsumerBase<EmailOperationConsumer>
+public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendingAcceptedConsumer>
 {
-    private readonly IEmailService _emailService;
+    private readonly IStatusService _statusService;
     private readonly ICommonProducer _producer;
     private readonly string _retryTopicName;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="EmailOperationConsumer"/> class.
+    /// Initializes a new instance of the <see cref="EmailSendingAcceptedConsumer"/> class.
     /// </summary>
-    public EmailOperationConsumer(
-        IEmailService emailService,
+    public EmailSendingAcceptedConsumer(
+        IStatusService statusService,
         ICommonProducer producer,
         KafkaSettings kafkaSettings,
-        ILogger<EmailOperationConsumer> logger)
+        ILogger<EmailSendingAcceptedConsumer> logger)
         : base(kafkaSettings, logger, kafkaSettings.EmailSendingAcceptedTopicName)
     {
-        _emailService = emailService;
+        _statusService = statusService;
         _producer = producer;
         _retryTopicName = kafkaSettings.EmailSendingAcceptedRetryTopicName;
     }
@@ -49,7 +46,7 @@ public sealed class EmailOperationConsumer : KafkaConsumerBase<EmailOperationCon
             return;
         }
 
-        await _emailService.UpdateSendStatus(operationIdentifier);
+        await _statusService.UpdateSendStatus(operationIdentifier);
     }
 
     private async Task RetryOperation(string message)

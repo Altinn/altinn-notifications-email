@@ -1,8 +1,7 @@
-﻿namespace Altinn.Notifications.Email.Core.Integrations.Interfaces;
+﻿namespace Altinn.Notifications.Email.Core.Dependencies;
 
 /// <summary>
-/// This interface describes the minimum requirements for a Kafka producer that
-/// can be used by many topic specific producers.
+/// This interface describes the minimum requirements for a Kafka producer 
 /// </summary>
 public interface ICommonProducer
 {

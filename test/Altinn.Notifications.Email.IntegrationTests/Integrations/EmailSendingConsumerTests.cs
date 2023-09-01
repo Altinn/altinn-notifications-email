@@ -1,6 +1,5 @@
-﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Enums;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
+﻿using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;
@@ -22,13 +21,13 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     private readonly string EmailSendingConsumerTopic = Guid.NewGuid().ToString();
     private readonly string EmailSendingAcceptedProducerTopic = Guid.NewGuid().ToString();
 
-    private readonly IEmailService _emailServiceMock;
+    private readonly ISendingService _emailServiceMock;
 
     private readonly ServiceProvider _serviceProvider;
 
     public EmailSendingConsumerTests()
     {
-        _emailServiceMock = Substitute.For<IEmailService>();
+        _emailServiceMock = Substitute.For<ISendingService>();
 
         var kafkaSettings = new KafkaSettings
         {
@@ -50,7 +49,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
             .AddSingleton(kafkaSettings)
             .AddSingleton<ICommonProducer, CommonProducer>()
             .AddSingleton(_emailServiceMock)
-            .AddHostedService<EmailSendingConsumer>();
+            .AddHostedService<SendEmailQueueConsumer>();
 
         _serviceProvider = services.BuildServiceProvider();
     }
@@ -70,11 +69,11 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     public async Task ConsumeEmailTest_Successfull_deserialization_of_message_Service_called_once()
     {
         // Arrange
-        Core.Models.Email email =
+        Core.Sending.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
         using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
-        using EmailSendingConsumer sut = GetEmailSendingConsumer();
+        using SendEmailQueueConsumer sut = GetEmailSendingConsumer();
 
         // Act
         await kafkaProducer.ProduceAsync(EmailSendingConsumerTopic, JsonSerializer.Serialize(email));
@@ -84,7 +83,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.Received().SendAsync(Arg.Any<Core.Models.Email>());
+        await _emailServiceMock.Received().SendAsync(Arg.Any<Core.Sending.Email>());
     }
 
     [Fact]
@@ -92,7 +91,7 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     {
         // Arrange
         using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
-        using EmailSendingConsumer sut = GetEmailSendingConsumer();
+        using SendEmailQueueConsumer sut = GetEmailSendingConsumer();
 
         // Act
         await kafkaProducer.ProduceAsync(EmailSendingConsumerTopic, "Not an email");
@@ -102,12 +101,12 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.DidNotReceive().SendAsync(Arg.Any<Core.Models.Email>());
+        await _emailServiceMock.DidNotReceive().SendAsync(Arg.Any<Core.Sending.Email>());
     }
 
-    private EmailSendingConsumer GetEmailSendingConsumer()
+    private SendEmailQueueConsumer GetEmailSendingConsumer()
     {
-        var emailSendingConsumer = _serviceProvider.GetService(typeof(IHostedService)) as EmailSendingConsumer;
+        var emailSendingConsumer = _serviceProvider.GetService(typeof(IHostedService)) as SendEmailQueueConsumer;
 
         if (emailSendingConsumer == null)
         {

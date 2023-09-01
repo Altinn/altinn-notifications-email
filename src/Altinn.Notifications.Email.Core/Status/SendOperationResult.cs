@@ -1,9 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using Altinn.Notifications.Email.Core.Enums;
-
-namespace Altinn.Notifications.Email.Core.Models
+namespace Altinn.Notifications.Email.Core.Status
 {
     /// <summary>
     /// A class representing a send operation update object

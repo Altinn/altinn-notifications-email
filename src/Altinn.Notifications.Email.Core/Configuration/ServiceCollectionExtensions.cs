@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Altinn.Notifications.Email.Core.Sending;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Altinn.Notifications.Email.Core.Configuration;
@@ -23,7 +24,7 @@ public static class ServiceCollectionExtensions
             throw new ArgumentNullException(nameof(config), "Required Kafka topic settings is missing from application configuration");
         }
 
-        services.AddSingleton<IEmailService, EmailService>()
+        services.AddSingleton<ISendingService, SendingService>()
                 .AddSingleton(topicSettings);
 
         return services;

@@ -1,4 +1,4 @@
-﻿namespace Altinn.Notifications.Email.Core.Enums;
+﻿namespace Altinn.Notifications.Email.Core.Status;
 
 /// <summary>
 /// Enum describing email send result types
@@ -8,7 +8,7 @@ public enum EmailSendResult
     /// <summary>
     /// Failed, to be specified
     /// </summary>
-    Failed, 
+    Failed,
 
     /// <summary>
     /// Email send operation running

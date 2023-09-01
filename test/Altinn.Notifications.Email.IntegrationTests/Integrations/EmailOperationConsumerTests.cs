@@ -1,6 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core;
-using Altinn.Notifications.Email.Core.Integrations.Interfaces;
-using Altinn.Notifications.Email.Core.Models;
+using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 using Altinn.Notifications.Email.Integrations.Producers;
@@ -19,7 +19,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
     {
         private readonly string EmailSendingAcceptedTopicName = Guid.NewGuid().ToString();
         private readonly string EmailSendingAcceptedRetryTopicName = Guid.NewGuid().ToString();
-        private ServiceProvider _serviceProvider;
+        private ServiceProvider? _serviceProvider;
         private readonly string _validTopicMessage = $"{{ \"NotificationId\": \"{Guid.NewGuid()}\", \"OperationId\" : \"operationId\" }}";
 
         public async Task InitializeAsync()
@@ -37,10 +37,10 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
         public async Task ConsumeOperation_ValidOperation_ServiceCalledOnce()
         {
             // Arrange
-            Mock<IEmailService> emailServiceMock = new();
-            emailServiceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
+            Mock<IStatusService> serviceMock = new();
+            serviceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
 
-            using EmailOperationConsumer sut = GetConsumer(emailServiceMock.Object);
+            using EmailSendingAcceptedConsumer sut = GetConsumer(serviceMock.Object);
 
             // Act
             await PopulateKafkaTopic(_validTopicMessage);
@@ -50,7 +50,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             await sut.StopAsync(CancellationToken.None);
 
             // Assert
-            emailServiceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Once);
+            serviceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Once);
         }
 
 
@@ -58,10 +58,10 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
         public async Task ConsumeOperation_DeserialisationFails_ServiceIsNotCalled()
         {
             // Arrange
-            Mock<IEmailService> emailServiceMock = new();
-            emailServiceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
+            Mock<IStatusService> serviceMock = new();
+            serviceMock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
 
-            using EmailOperationConsumer sut = GetConsumer(emailServiceMock.Object);
+            using EmailSendingAcceptedConsumer sut = GetConsumer(serviceMock.Object);
 
             // Act
             await PopulateKafkaTopic("{\"key\":\"value\"}");
@@ -71,22 +71,26 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             await sut.StopAsync(CancellationToken.None);
 
             // Assert
-            emailServiceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Never);
+            serviceMock.Verify(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()), Times.Never);
         }
 
         private async Task PopulateKafkaTopic(string message)
         {
+            if (_serviceProvider == null)
+            {
+                Assert.Fail("Unable to populate kafka topic. _serviceProvider is null.");
+            }
             using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
             await kafkaProducer.ProduceAsync(EmailSendingAcceptedTopicName, message);
         }
 
-        private EmailOperationConsumer GetConsumer(IEmailService? emailService = null)
+        private EmailSendingAcceptedConsumer GetConsumer(IStatusService? statusService = null)
         {
-            if (emailService == null)
+            if (statusService == null)
             {
-                Mock<IEmailService> mock = new();
+                Mock<IStatusService> mock = new();
                 mock.Setup(m => m.UpdateSendStatus(It.IsAny<SendNotificationOperationIdentifier>()));
-                emailService = mock.Object;
+                statusService = mock.Object;
             }
 
             var kafkaSettings = new KafkaSettings
@@ -108,12 +112,12 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
                 .AddLogging()
                 .AddSingleton(kafkaSettings)
                 .AddSingleton<ICommonProducer, CommonProducer>()
-                .AddSingleton(emailService)
-                .AddHostedService<EmailOperationConsumer>();
+                .AddSingleton(statusService)
+                .AddHostedService<EmailSendingAcceptedConsumer>();
 
             _serviceProvider = services.BuildServiceProvider();
 
-            var emailOperationConsumer = _serviceProvider.GetService(typeof(IHostedService)) as EmailOperationConsumer;
+            var emailOperationConsumer = _serviceProvider.GetService(typeof(IHostedService)) as EmailSendingAcceptedConsumer;
 
             if (emailOperationConsumer == null)
             {

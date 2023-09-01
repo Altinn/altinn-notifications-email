@@ -1,6 +1,6 @@
-﻿using Altinn.Notifications.Email.Core.Enums;
+﻿using Altinn.Notifications.Email.Core.Status;
 
-namespace Altinn.Notifications.Email.Core;
+namespace Altinn.Notifications.Email.Core.Dependencies;
 
 /// <summary>
 /// Describes the public interface of a client able to send email requests to some mailing service.
@@ -12,7 +12,7 @@ public interface IEmailServiceClient
     /// </summary>
     /// <param name="email">The email text</param>
     /// <returns>An operation id for tracing the success of the task</returns>
-    Task<string> SendEmail(Models.Email email);
+    Task<string> SendEmail(Sending.Email email);
 
     /// <summary>
     /// Method for retrieving updated send status of an email.

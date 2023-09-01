@@ -8,7 +8,7 @@ using Altinn.Notifications.Email.IntegrationTests.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-using NSubstitute;
+using Moq;
 
 using System.Text.Json;
 
@@ -21,15 +21,12 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     private readonly string EmailSendingConsumerTopic = Guid.NewGuid().ToString();
     private readonly string EmailSendingAcceptedProducerTopic = Guid.NewGuid().ToString();
 
-    private readonly ISendingService _emailServiceMock;
-
-    private readonly ServiceProvider _serviceProvider;
+    private readonly KafkaSettings _kafkaSettings;
+    private ServiceProvider _serviceProvider;
 
     public EmailSendingConsumerTests()
     {
-        _emailServiceMock = Substitute.For<ISendingService>();
-
-        var kafkaSettings = new KafkaSettings
+        _kafkaSettings = new KafkaSettings
         {
             BrokerAddress = "localhost:9092",
             Consumer = new()
@@ -43,15 +40,6 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
                 TopicList = new List<string> { EmailSendingConsumerTopic, EmailSendingAcceptedProducerTopic }
             }
         };
-
-        IServiceCollection services = new ServiceCollection()
-            .AddLogging()
-            .AddSingleton(kafkaSettings)
-            .AddSingleton<ICommonProducer, CommonProducer>()
-            .AddSingleton(_emailServiceMock)
-            .AddHostedService<SendEmailQueueConsumer>();
-
-        _serviceProvider = services.BuildServiceProvider();
     }
 
     public async Task InitializeAsync()
@@ -69,11 +57,14 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
     public async Task ConsumeEmailTest_Successfull_deserialization_of_message_Service_called_once()
     {
         // Arrange
+        Mock<ISendingService> serviceMock = new();
+        serviceMock.Setup(es => es.SendAsync(It.IsAny<Core.Sending.Email>()));
+
         Core.Sending.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
+        using SendEmailQueueConsumer sut = GetEmailSendingConsumer(serviceMock.Object);
         using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
-        using SendEmailQueueConsumer sut = GetEmailSendingConsumer();
 
         // Act
         await kafkaProducer.ProduceAsync(EmailSendingConsumerTopic, JsonSerializer.Serialize(email));
@@ -83,15 +74,17 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.Received().SendAsync(Arg.Any<Core.Sending.Email>());
+        serviceMock.Verify(es => es.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
     }
 
     [Fact]
     public async Task ConsumeEmailTest_Deserialization_of_message_fails_Never_calls_service()
     {
         // Arrange
+        Mock<ISendingService> serviceMock = new();
+        serviceMock.Setup(es => es.SendAsync(It.IsAny<Core.Sending.Email>()));
+        using SendEmailQueueConsumer sut = GetEmailSendingConsumer(serviceMock.Object);
         using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
-        using SendEmailQueueConsumer sut = GetEmailSendingConsumer();
 
         // Act
         await kafkaProducer.ProduceAsync(EmailSendingConsumerTopic, "Not an email");
@@ -101,11 +94,21 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         await sut.StopAsync(CancellationToken.None);
 
         // Assert
-        await _emailServiceMock.DidNotReceive().SendAsync(Arg.Any<Core.Sending.Email>());
+        serviceMock.Verify(es => es.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Never);
     }
 
-    private SendEmailQueueConsumer GetEmailSendingConsumer()
+    private SendEmailQueueConsumer GetEmailSendingConsumer(ISendingService sendingService)
     {
+
+        IServiceCollection services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton(_kafkaSettings)
+            .AddSingleton<ICommonProducer, CommonProducer>()
+            .AddSingleton(sendingService)
+            .AddHostedService<SendEmailQueueConsumer>();
+
+        _serviceProvider = services.BuildServiceProvider();
+
         var emailSendingConsumer = _serviceProvider.GetService(typeof(IHostedService)) as SendEmailQueueConsumer;
 
         if (emailSendingConsumer == null)
@@ -116,3 +119,4 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         return emailSendingConsumer;
     }
 }
+

@@ -3,6 +3,7 @@
 using Xunit;
 
 namespace Altinn.Notifications.Email.Tests.Email.Integrations;
+
 public class SharedClientConfigTests
 {
     [Theory]

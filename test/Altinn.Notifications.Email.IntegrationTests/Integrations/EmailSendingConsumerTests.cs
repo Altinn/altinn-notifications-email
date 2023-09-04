@@ -1,4 +1,6 @@
-﻿using Altinn.Notifications.Email.Core.Dependencies;
+﻿using System.Text.Json;
+
+using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
@@ -9,8 +11,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 using Moq;
-
-using System.Text.Json;
 
 using Xunit;
 
@@ -119,4 +119,3 @@ public sealed class EmailSendingConsumerTests : IAsyncLifetime
         return emailSendingConsumer;
     }
 }
-

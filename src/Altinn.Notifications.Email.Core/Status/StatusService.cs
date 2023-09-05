@@ -34,7 +34,6 @@ public class StatusService : IStatusService
     {
         EmailSendResult result = await _emailServiceClient.GetOperationUpdate(operationIdentifier.OperationId);
 
-        Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult: " + System.Text.Json.JsonSerializer.Serialize(result));
         if (result != EmailSendResult.Sending)
         {
             var operationResult = new SendOperationResult()
@@ -44,10 +43,12 @@ public class StatusService : IStatusService
                 SendResult = result
             };
 
+            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is not sending: " + operationResult.Serialize());
             await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
         }
         else
         {
+            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is stills ending. Back on retry topic: " + _settings.EmailSendingAcceptedRetryTopicName);
             await _producer.ProduceAsync(_settings.EmailSendingAcceptedRetryTopicName, operationIdentifier.Serialize());
         }
     }

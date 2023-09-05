@@ -44,17 +44,12 @@ public class KafkaSettings
     /// The name of the send email queue topic
     /// </summary>
     public string SendEmailQueueTopicName { get; set; } = string.Empty;
-
-    /// <summary>
-    /// The name of the send email queue retry  topic
-    /// </summary>    
-    public string SendEmailQueueRetryTopicName { get; set; } = string.Empty;
 }
 
 /// <summary>
 /// Kafka Consumer specific settings
 /// </summary>
-public class ConsumerSettings
+public class EmailSendingConsumerSettings
 {
     /// <summary>
     /// The group id for all consumers of the Altinn Notifications service
@@ -106,5 +101,5 @@ public class AdminSettings
     /// <summary>
     /// The list of topics the admin client is responsible for ensuring that exist
     /// </summary>
-    public List<string> TopicList { get; set; } = new List<string>();
-}
+    public string SaslPassword { get; set; } = string.Empty;
+

@@ -4,7 +4,7 @@ using Altinn.Notifications.Email.Core.Dependencies;
 namespace Altinn.Notifications.Email.Core.Sending;
 
 /// <summary>
-/// A service implementation of the <see cref="ISendingService"/> class
+/// Service responsible for handling email sending requests.
 /// </summary>
 public class SendingService : ISendingService
 {

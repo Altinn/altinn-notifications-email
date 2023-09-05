@@ -1,10 +1,13 @@
 ﻿using System.Diagnostics.CodeAnalysis;
+
 using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Azure;
 using Azure.Communication.Email;
+
+using Microsoft.Extensions.Logging;
 
 namespace Altinn.Notifications.Email.Integrations.Clients;
 
@@ -16,14 +19,17 @@ namespace Altinn.Notifications.Email.Integrations.Clients;
 public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;
+    private readonly ILogger<IEmailServiceClient> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
     /// </summary>
     /// <param name="communicationServicesSettings">Settings for integration against Communication Services.</param>
-    public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings)
+    /// <param name="logger">A logger</param>
+    public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings, ILogger<IEmailServiceClient> logger)
     {
         _emailClient = new EmailClient(communicationServicesSettings.ConnectionString);
+        _logger = logger;
     }
 
     /// <summary>
@@ -55,23 +61,27 @@ public class EmailServiceClient : IEmailServiceClient
     /// <summary>
     /// Check the email sending operation status
     /// </summary>
-    /// <returns></returns>
+    /// <returns>An email send result</returns>
     public async Task<Core.Status.EmailSendResult> GetOperationUpdate(string operationId)
     {
         var operation = new EmailSendOperation(operationId, _emailClient);
         await operation.UpdateStatusAsync();
         if (operation.HasCompleted && operation.HasValue)
         {
-            if (operation.Value.Status == EmailSendStatus.Succeeded)
+            var status = operation.Value.Status;
+            if (status == EmailSendStatus.Succeeded)
             {
                 return Core.Status.EmailSendResult.Succeeded;
             }
-            else if (operation.Value.Status == EmailSendStatus.Failed || operation.Value.Status == EmailSendStatus.Canceled)
+            else if (status == EmailSendStatus.Failed || status == EmailSendStatus.Canceled)
             {
-                var response = operation.WaitForCompletionResponse();
-
                 // TODO: check the reasons for failure to create reasonable types
-                Console.WriteLine(response.ReasonPhrase);
+                var response = operation.WaitForCompletionResponse();
+                _logger.LogError(
+                    "// EmailServiceClient // GetOperationUpdate // Operation {OperationId} failed with status {Status} and reason phrase {Reason}",
+                    operationId,
+                    status,
+                    response.ReasonPhrase);
                 return Core.Status.EmailSendResult.Failed;
             }
         }

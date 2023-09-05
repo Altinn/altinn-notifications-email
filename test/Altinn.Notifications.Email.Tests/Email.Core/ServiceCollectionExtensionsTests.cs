@@ -3,8 +3,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-using System.Security.Authentication;
-
 using Xunit;
 
 namespace Altinn.Notifications.Tests.Notifications.Core.TestingExtensions;

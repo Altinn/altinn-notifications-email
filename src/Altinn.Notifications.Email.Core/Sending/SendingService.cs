@@ -32,7 +32,6 @@ public class SendingService : ISendingService
     public async Task SendAsync(Email email)
     {
         string operationId = await _emailServiceClient.SendEmail(email);
-        Console.WriteLine("// SendingService // SendAsync // Email service called, operation id: " + operationId);
 
         var operationIdentifier = new SendNotificationOperationIdentifier()
         {

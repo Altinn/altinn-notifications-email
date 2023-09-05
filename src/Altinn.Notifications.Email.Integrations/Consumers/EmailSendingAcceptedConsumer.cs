@@ -3,6 +3,8 @@ using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Integrations.Kafka.Consumers;
 
+using Confluent.Kafka;
+
 using Microsoft.Extensions.Logging;
 
 namespace Altinn.Notifications.Email.Integrations.Consumers;
@@ -14,6 +16,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 {
     private readonly IStatusService _statusService;
     private readonly ICommonProducer _producer;
+    private readonly ILogger<EmailSendingAcceptedConsumer> _logger;
     private readonly string _retryTopicName;
 
     /// <summary>
@@ -29,6 +32,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
         _statusService = statusService;
         _producer = producer;
         _retryTopicName = kafkaSettings.EmailSendingAcceptedRetryTopicName;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -39,18 +43,24 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 
     private async Task ConsumeOperation(string message)
     {
+        Console.WriteLine("// EmailSendingAcceptedConsumer // ConsumeOperation // " + message);
         bool succeeded = SendNotificationOperationIdentifier.TryParse(message, out SendNotificationOperationIdentifier operationIdentifier);
 
         if (!succeeded)
         {
+            _logger.LogError("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization of message failed. {Message}", message);
+            Console.WriteLine("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization of message failed.");
             return;
         }
+
+        Console.WriteLine("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization successful");
 
         await _statusService.UpdateSendStatus(operationIdentifier);
     }
 
     private async Task RetryOperation(string message)
     {
+        Console.WriteLine("// EmailSendingAcceptedConsumer // RetryOperation // Pushing to retry topic " + _retryTopicName);
         await _producer.ProduceAsync(_retryTopicName, message);
     }
 }

@@ -34,6 +34,7 @@ public class StatusService : IStatusService
     {
         EmailSendResult result = await _emailServiceClient.GetOperationUpdate(operationIdentifier.OperationId);
 
+        Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult: " + System.Text.Json.JsonSerializer.Serialize(result));
         if (result != EmailSendResult.Sending)
         {
             var operationResult = new SendOperationResult()

@@ -14,6 +14,7 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase<SendEmailQueueCon
 {
     private readonly ISendingService _emailService;
     private readonly ICommonProducer _producer;
+    private readonly ILogger<SendEmailQueueConsumer> _logger;
     private readonly string _retryTopicName;
 
     /// <summary>
@@ -29,6 +30,7 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase<SendEmailQueueCon
         _emailService = emailService;
         _producer = producer;
         _retryTopicName = kafkaSettings.SendEmailQueueRetryTopicName;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -39,17 +41,14 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase<SendEmailQueueCon
 
     private async Task ConsumeEmail(string message)
     {
-        Console.WriteLine("// SendEmailQueueConsumer // ConsumeEmail" + message);
         bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
 
         if (!succeeded)
         {
-            Console.WriteLine("// SendEmailQueueConsumer // ConsumeEmail // Deserialization failed");
+            _logger.LogError("// SendEmailQueueConsumer // ConsumeEmail // Deserialization of message failed. {Message}", message);
 
             return;
         }
-
-        Console.WriteLine("// SendEmailQueueConsumer // ConsumeEmail // Deserialization succeeded");
 
         await _emailService.SendAsync(email);
     }

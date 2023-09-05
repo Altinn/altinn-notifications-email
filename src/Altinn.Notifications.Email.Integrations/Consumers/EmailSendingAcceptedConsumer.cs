@@ -3,8 +3,6 @@ using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Integrations.Kafka.Consumers;
 
-using Confluent.Kafka;
-
 using Microsoft.Extensions.Logging;
 
 namespace Altinn.Notifications.Email.Integrations.Consumers;
@@ -60,6 +58,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 
     private async Task RetryOperation(string message)
     {
+        Thread.Sleep(10000);
         Console.WriteLine("// EmailSendingAcceptedConsumer // RetryOperation // Pushing to retry topic " + _retryTopicName);
         await _producer.ProduceAsync(_retryTopicName, message);
     }

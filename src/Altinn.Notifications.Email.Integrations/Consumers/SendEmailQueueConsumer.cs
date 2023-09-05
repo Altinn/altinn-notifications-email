@@ -39,12 +39,17 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase<SendEmailQueueCon
 
     private async Task ConsumeEmail(string message)
     {
+        Console.WriteLine("// SendEmailQueueConsumer // ConsumeEmail" + message);
         bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
 
         if (!succeeded)
         {
+            Console.WriteLine("// SendEmailQueueConsumer // ConsumeEmail // Deserialization failed");
+
             return;
         }
+
+        Console.WriteLine("// SendEmailQueueConsumer // ConsumeEmail // Deserialization succeeded");
 
         await _emailService.SendAsync(email);
     }

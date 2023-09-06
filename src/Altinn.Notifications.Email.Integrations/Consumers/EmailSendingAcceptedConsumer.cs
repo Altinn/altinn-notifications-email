@@ -41,17 +41,12 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 
     private async Task ConsumeOperation(string message)
     {
-        Console.WriteLine("// EmailSendingAcceptedConsumer // ConsumeOperation // " + message);
         bool succeeded = SendNotificationOperationIdentifier.TryParse(message, out SendNotificationOperationIdentifier operationIdentifier);
 
         if (!succeeded)
         {
-            _logger.LogError("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization of message failed. {Message}", message);
-            Console.WriteLine("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization of message failed.");
             return;
         }
-
-        Console.WriteLine("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization successful");
 
         await _statusService.UpdateSendStatus(operationIdentifier);
     }

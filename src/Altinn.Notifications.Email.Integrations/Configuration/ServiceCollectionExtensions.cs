@@ -51,7 +51,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <param name="services">service collection.</param>
     /// <param name="config">the configuration collection</param>
-    public static void AddIntegrationkaHealthChecks(this IServiceCollection services, IConfiguration config)
+    public static void AddIntegrationHealthChecks(this IServiceCollection services, IConfiguration config)
     {
         KafkaSettings kafkaSettings = config!.GetSection(nameof(KafkaSettings)).Get<KafkaSettings>()!;
 

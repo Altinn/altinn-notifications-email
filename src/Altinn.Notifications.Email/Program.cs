@@ -92,7 +92,7 @@ void ConfigureServices(IServiceCollection services, ConfigurationManager configu
 
     services.AddCoreServices(configuration);
     services.AddIntegrationServices(configuration);
-    services.AddIntegrationkaHealthChecks(configuration);
+    services.AddIntegrationHealthChecks(configuration);
     
     if (!string.IsNullOrEmpty(applicationInsightsConnectionString))
     {

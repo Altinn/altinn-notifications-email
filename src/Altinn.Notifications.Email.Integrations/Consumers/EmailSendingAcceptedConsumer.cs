@@ -49,14 +49,14 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
         }
 
         int diff = (int)(DateTime.UtcNow - operationIdentifier.LastStatusCheck).TotalMilliseconds;
-        Console.WriteLine("// EmailSendingAcceptedConsumer // RetryOperation // diff: " + diff + "\t " + DateTime.UtcNow);
+        Console.WriteLine($"// EmailSendingAcceptedConsumer // ConsumeOperation // {operationIdentifier.OperationId} diff: " + diff + "\t " + DateTime.UtcNow);
 
         if (diff < 5000)
         {
             await Task.Delay(5000 - diff);
         }
 
-        Console.WriteLine("// EmailSendingAcceptedConsumer // RetryOperation // Calling service: " + DateTime.UtcNow);
+        Console.WriteLine($"// EmailSendingAcceptedConsumer // ConsumeOperation // {operationIdentifier.OperationId} Calling service: " + DateTime.UtcNow);
         await _statusService.UpdateSendStatus(operationIdentifier);
     }
 

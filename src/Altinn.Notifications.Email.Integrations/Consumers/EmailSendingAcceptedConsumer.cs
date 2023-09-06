@@ -16,6 +16,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
     private readonly ICommonProducer _producer;
     private readonly ILogger<EmailSendingAcceptedConsumer> _logger;
     private readonly string _retryTopicName;
+    private const int _processingDelay = 5000;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailSendingAcceptedConsumer"/> class.
@@ -51,9 +52,9 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
         int diff = (int)(DateTime.UtcNow - operationIdentifier.LastStatusCheck).TotalMilliseconds;
         Console.WriteLine($"// EmailSendingAcceptedConsumer // ConsumeOperation // {operationIdentifier.OperationId} diff: " + diff + "\t " + DateTime.UtcNow);
 
-        if (diff < 5000)
+        if (diff < _processingDelay)
         {
-            await Task.Delay(5000 - diff);
+            await Task.Delay(_processingDelay - diff);
         }
 
         Console.WriteLine($"// EmailSendingAcceptedConsumer // ConsumeOperation // {operationIdentifier.OperationId} Calling service: " + DateTime.UtcNow);

@@ -48,7 +48,8 @@ public class StatusService : IStatusService
         }
         else
         {
-            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is stills ending." + operationIdentifier.OperationId + "Back on topic: " + _settings.EmailSendingAcceptedTopicName);
+            operationIdentifier.LastStatusCheck = DateTime.UtcNow;
+            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is still sending." + operationIdentifier.OperationId);
             await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
         }
     }

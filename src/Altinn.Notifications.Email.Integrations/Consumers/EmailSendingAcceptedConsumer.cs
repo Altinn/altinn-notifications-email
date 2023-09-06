@@ -16,7 +16,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
     private readonly ICommonProducer _producer;
     private readonly ILogger<EmailSendingAcceptedConsumer> _logger;
     private readonly string _retryTopicName;
-    private const int _processingDelay = 5000;
+    private const int _processingDelay = 8000;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailSendingAcceptedConsumer"/> class.

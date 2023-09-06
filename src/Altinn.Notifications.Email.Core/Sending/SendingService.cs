@@ -39,7 +39,6 @@ public class SendingService : ISendingService
             OperationId = operationId
         };
 
-        Thread.Sleep(10000);
         await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
     }
 }

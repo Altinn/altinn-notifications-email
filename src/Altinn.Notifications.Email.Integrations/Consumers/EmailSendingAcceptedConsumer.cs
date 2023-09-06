@@ -14,7 +14,6 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 {
     private readonly IStatusService _statusService;
     private readonly ICommonProducer _producer;
-    private readonly ILogger<EmailSendingAcceptedConsumer> _logger;
     private readonly string _retryTopicName;
     private const int _processingDelay = 8000;
 
@@ -30,8 +29,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
     {
         _statusService = statusService;
         _producer = producer;
-        _retryTopicName = kafkaSettings.EmailSendingAcceptedRetryTopicName;
-        _logger = logger;
+        _retryTopicName = kafkaSettings.EmailSendingAcceptedTopicName;
     }
 
     /// <inheritdoc/>
@@ -50,7 +48,6 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
         }
 
         int diff = (int)(DateTime.UtcNow - operationIdentifier.LastStatusCheck).TotalMilliseconds;
-        Console.WriteLine($"// EmailSendingAcceptedConsumer // ConsumeOperation // {operationIdentifier.OperationId} diff: " + diff + "\t " + DateTime.UtcNow);
 
         if (diff < _processingDelay)
         {
@@ -63,7 +60,6 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 
     private async Task RetryOperation(string message)
     {
-        Console.WriteLine("// EmailSendingAcceptedConsumer // RetryOperation // Pushing to retry topic " + _retryTopicName);
         await _producer.ProduceAsync(_retryTopicName, message);
     }
 }

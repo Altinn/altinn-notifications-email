@@ -48,7 +48,7 @@ public class StatusService : IStatusService
         }
         else
         {
-            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is stills ending." + operationResult.OperationId + "Back on topic: " + _settings.EmailSendingAcceptedTopicName);
+            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is stills ending." + operationIdentifier.OperationId + "Back on topic: " + _settings.EmailSendingAcceptedTopicName);
             await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
         }
     }

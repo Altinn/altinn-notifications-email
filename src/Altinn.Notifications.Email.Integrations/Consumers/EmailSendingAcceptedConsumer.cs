@@ -18,6 +18,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
     private readonly ICommonProducer _producer;
     private readonly string _retryTopicName;
     private const int _processingDelay = 8000;
+    private readonly IDateTimeService _dateTime;
     private readonly ILogger<EmailSendingAcceptedConsumer> _logger;
 
     /// <summary>
@@ -27,12 +28,14 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
         IStatusService statusService,
         ICommonProducer producer,
         KafkaSettings kafkaSettings,
+        IDateTimeService dateTime,
         ILogger<EmailSendingAcceptedConsumer> logger)
         : base(kafkaSettings, logger, kafkaSettings.EmailSendingAcceptedTopicName)
     {
         _statusService = statusService;
         _producer = producer;
         _retryTopicName = kafkaSettings.EmailSendingAcceptedTopicName;
+        _dateTime = dateTime;
         _logger = logger;
     }
 
@@ -53,7 +56,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
             return;
         }
 
-        int diff = (int)(DateTime.UtcNow - operationIdentifier.LastStatusCheck).TotalMilliseconds;
+        int diff = (int)(_dateTime.UtcNow() - operationIdentifier.LastStatusCheck).TotalMilliseconds;
 
         if (diff < _processingDelay)
         {

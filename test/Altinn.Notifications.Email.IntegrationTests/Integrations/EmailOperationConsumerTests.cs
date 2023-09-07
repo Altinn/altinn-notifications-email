@@ -109,7 +109,8 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
                 .AddSingleton(kafkaSettings)
                 .AddSingleton<ICommonProducer, CommonProducer>()
                 .AddSingleton(statusService)
-                .AddHostedService<EmailSendingAcceptedConsumer>();
+                .AddHostedService<EmailSendingAcceptedConsumer>()
+                .AddSingleton<IDateTimeService, DateTimeService>();
 
             _serviceProvider = services.BuildServiceProvider();
 

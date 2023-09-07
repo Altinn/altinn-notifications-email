@@ -43,7 +43,6 @@ public class StatusService : IStatusService
                 SendResult = result
             };
 
-            Console.WriteLine("// StatusService // UpdateSendStatus // EmailSendResult is succeeded: " + operationResult.OperationId);
             await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
         }
         else

@@ -10,7 +10,7 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// <summary>
 /// Kafka consumer class for handling the email queue.
 /// </summary>
-public sealed class SendEmailQueueConsumer : KafkaConsumerBase<SendEmailQueueConsumer>
+public sealed class SendEmailQueueConsumer : KafkaConsumerBase
 {
     private readonly ISendingService _emailService;
     private readonly ICommonProducer _producer;

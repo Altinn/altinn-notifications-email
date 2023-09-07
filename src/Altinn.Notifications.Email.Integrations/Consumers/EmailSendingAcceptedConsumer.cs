@@ -3,6 +3,8 @@ using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Integrations.Kafka.Consumers;
 
+using Confluent.Kafka;
+
 using Microsoft.Extensions.Logging;
 
 namespace Altinn.Notifications.Email.Integrations.Consumers;
@@ -10,12 +12,13 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// <summary>
 /// Kafka consumer class for handling the email queue.
 /// </summary>
-public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendingAcceptedConsumer>
+public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
 {
     private readonly IStatusService _statusService;
     private readonly ICommonProducer _producer;
     private readonly string _retryTopicName;
     private const int _processingDelay = 8000;
+    private readonly ILogger<EmailSendingAcceptedConsumer> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailSendingAcceptedConsumer"/> class.
@@ -30,6 +33,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
         _statusService = statusService;
         _producer = producer;
         _retryTopicName = kafkaSettings.EmailSendingAcceptedTopicName;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -44,6 +48,8 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
 
         if (!succeeded)
         {
+            _logger.LogError("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization of message failed. {Message}", message);
+
             return;
         }
 
@@ -54,7 +60,6 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase<EmailSendin
             await Task.Delay(_processingDelay - diff);
         }
 
-        Console.WriteLine($"// EmailSendingAcceptedConsumer // ConsumeOperation // {operationIdentifier.OperationId} Calling service: " + DateTime.UtcNow);
         await _statusService.UpdateSendStatus(operationIdentifier);
     }
 

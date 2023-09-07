@@ -19,6 +19,7 @@ public class StatusService : IStatusService
     /// </summary>
     /// <param name="emailServiceClient">A client that can perform actual mail sending.</param>
     /// <param name="producer">A kafka producer.</param>
+    /// <param name="dateTime">A datetime service.</param>
     /// <param name="settings">The topic settings.</param>
     public StatusService(
         IEmailServiceClient emailServiceClient,

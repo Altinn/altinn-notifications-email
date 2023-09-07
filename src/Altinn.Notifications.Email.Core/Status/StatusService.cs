@@ -12,6 +12,7 @@ public class StatusService : IStatusService
     private readonly IEmailServiceClient _emailServiceClient;
     private readonly TopicSettings _settings;
     private readonly ICommonProducer _producer;
+    private readonly IDateTimeService _dateTime;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StatusService"/> class.
@@ -22,11 +23,13 @@ public class StatusService : IStatusService
     public StatusService(
         IEmailServiceClient emailServiceClient,
         ICommonProducer producer,
+        IDateTimeService dateTime,
         TopicSettings settings)
     {
         _emailServiceClient = emailServiceClient;
         _producer = producer;
         _settings = settings;
+        _dateTime = dateTime;
     }
 
     /// <inheritdoc/>
@@ -47,7 +50,7 @@ public class StatusService : IStatusService
         }
         else
         {
-            operationIdentifier.LastStatusCheck = DateTime.UtcNow;
+            operationIdentifier.LastStatusCheck = _dateTime.UtcNow();
             await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
         }
     }

@@ -31,7 +31,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
 
             Mock<IEmailServiceClient> clientMock = new();
             clientMock.Setup(c => c.SendEmail(It.IsAny<Notifications.Email.Core.Sending.Email>()))
-                .ReturnsAsync(("operation-id", null));
+                .ReturnsAsync("operation-id");
 
             Mock<ICommonProducer> producerMock = new();
             producerMock.Setup(p => p.ProduceAsync(
@@ -59,7 +59,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
 
             Mock<IEmailServiceClient> clientMock = new();
             clientMock.Setup(c => c.SendEmail(It.IsAny<Notifications.Email.Core.Sending.Email>()))
-                .ReturnsAsync((null, EmailSendResult.Failed_InvalidEmailFormat));
+                .ReturnsAsync(EmailSendResult.Failed_InvalidEmailFormat);
 
             Mock<ICommonProducer> producerMock = new();
             producerMock.Setup(p => p.ProduceAsync(

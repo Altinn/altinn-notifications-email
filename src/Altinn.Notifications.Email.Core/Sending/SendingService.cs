@@ -1,5 +1,6 @@
 ﻿using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Status;
 
 namespace Altinn.Notifications.Email.Core.Sending;
@@ -32,27 +33,28 @@ public class SendingService : ISendingService
     /// <inheritdoc/>
     public async Task SendAsync(Email email)
     {
-        (string? operationId, EmailSendResult? result) = await _emailServiceClient.SendEmail(email);
+        Result<string, EmailSendResult> result = await _emailServiceClient.SendEmail(email);
 
-        if (operationId != null)
-        {
-            var operationIdentifier = new SendNotificationOperationIdentifier()
+        await result.Match(
+            async operationId =>
             {
-                NotificationId = email.NotificationId,
-                OperationId = operationId
-            };
+                var operationIdentifier = new SendNotificationOperationIdentifier()
+                {
+                    NotificationId = email.NotificationId,
+                    OperationId = operationId
+                };
 
-            await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
-        }
-        else
-        {
-            var operationResult = new SendOperationResult()
+                await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
+            },
+            async emailSendResult =>
             {
-                NotificationId = email.NotificationId,
-                SendResult = result!.Value
-            };
+                var operationResult = new SendOperationResult()
+                {
+                    NotificationId = email.NotificationId,
+                    SendResult = emailSendResult
+                };
 
-            await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
-        }
+                await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
+            });
     }
 }

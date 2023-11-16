@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
 using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
@@ -39,7 +40,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// </summary>
     /// <param name="email">The email</param>
     /// <returns>A Task representing the asyncrhonous operation.</returns>
-    public async Task<(string? OperationId, Core.Status.EmailSendResult? Result)> SendEmail(Core.Sending.Email email)
+    public async Task<Result<string, Core.Status.EmailSendResult>> SendEmail(Core.Sending.Email email)
     {
         EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
@@ -58,18 +59,19 @@ public class EmailServiceClient : IEmailServiceClient
         try
         {
             EmailSendOperation emailSendOperation = await _emailClient.SendAsync(WaitUntil.Started, emailMessage);
-            return (emailSendOperation.Id, null);
+
+            return emailSendOperation.Id;
         }
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
             if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
             {
-                return (null, Core.Status.EmailSendResult.Failed_InvalidEmailFormat);
+                return Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
             }
             else
             {
-                return (null, Core.Status.EmailSendResult.Failed);
+                return Core.Status.EmailSendResult.Failed;
             }
         }   
     }

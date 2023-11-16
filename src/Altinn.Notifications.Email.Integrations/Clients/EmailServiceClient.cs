@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
 using Altinn.Notifications.Email.Core.Dependencies;
+using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
@@ -37,7 +38,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// </summary>
     /// <param name="email">The email</param>
     /// <returns>A Task representing the asyncrhonous operation.</returns>
-    public async Task<string> SendEmail(Core.Sending.Email email)
+    public async Task<(string? OperationId, ServiceError? Error)> SendEmail(Core.Sending.Email email)
     {
         EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
@@ -53,9 +54,16 @@ public class EmailServiceClient : IEmailServiceClient
         }
 
         EmailMessage emailMessage = new(email.FromAddress, email.ToAddress, emailContent);
-
-        EmailSendOperation emailSendOperation = await _emailClient.SendAsync(WaitUntil.Started, emailMessage);
-        return emailSendOperation.Id;
+        try
+        {
+            EmailSendOperation emailSendOperation = await _emailClient.SendAsync(WaitUntil.Started, emailMessage);
+            return (emailSendOperation.Id, null);
+        }
+        catch (RequestFailedException e)
+        {
+            _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
+            return (null, new ServiceError(e.Status, e.Message));
+        }   
     }
 
     /// <summary>

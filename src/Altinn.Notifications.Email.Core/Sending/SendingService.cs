@@ -1,6 +1,5 @@
 ﻿using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Status;
 
 namespace Altinn.Notifications.Email.Core.Sending;
@@ -13,7 +12,6 @@ public class SendingService : ISendingService
     private readonly IEmailServiceClient _emailServiceClient;
     private readonly TopicSettings _settings;
     private readonly ICommonProducer _producer;
-    private readonly string _failedInvalidEmailFormatErrorMessage = "Invalid format for email address";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SendingService"/> class.
@@ -34,7 +32,7 @@ public class SendingService : ISendingService
     /// <inheritdoc/>
     public async Task SendAsync(Email email)
     {
-        (string? operationId, ServiceError? serviceError) = await _emailServiceClient.SendEmail(email);
+        (string? operationId, EmailSendResult? result) = await _emailServiceClient.SendEmail(email);
 
         if (operationId != null)
         {
@@ -51,13 +49,8 @@ public class SendingService : ISendingService
             var operationResult = new SendOperationResult()
             {
                 NotificationId = email.NotificationId,
-                SendResult = EmailSendResult.Failed
+                SendResult = result!.Value
             };
-            
-            if (serviceError!.ErrorMessage!.Contains(_failedInvalidEmailFormatErrorMessage))
-            {
-                operationResult.SendResult = EmailSendResult.Failed_InvalidEmailFormat;
-            }
 
             await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
         }

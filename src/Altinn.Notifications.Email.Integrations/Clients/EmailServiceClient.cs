@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
 using Altinn.Notifications.Email.Core.Dependencies;
-using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Sending;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
@@ -21,6 +20,8 @@ public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;
     private readonly ILogger<IEmailServiceClient> _logger;
+    
+    private readonly string _failedInvalidEmailFormatErrorMessage = "Invalid format for email address";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
@@ -38,7 +39,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// </summary>
     /// <param name="email">The email</param>
     /// <returns>A Task representing the asyncrhonous operation.</returns>
-    public async Task<(string? OperationId, ServiceError? Error)> SendEmail(Core.Sending.Email email)
+    public async Task<(string? OperationId, Core.Status.EmailSendResult? Result)> SendEmail(Core.Sending.Email email)
     {
         EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
@@ -62,7 +63,14 @@ public class EmailServiceClient : IEmailServiceClient
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
-            return (null, new ServiceError(e.Status, e.Message));
+            if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
+            {
+                return (null, Core.Status.EmailSendResult.Failed_InvalidEmailFormat);
+            }
+            else
+            {
+                return (null, Core.Status.EmailSendResult.Failed);
+            }
         }   
     }
 

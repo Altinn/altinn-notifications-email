@@ -21,7 +21,7 @@ public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;
     private readonly ILogger<IEmailServiceClient> _logger;
-    
+
     private readonly string _failedInvalidEmailFormatErrorMessage = "Invalid format for email address";
 
     /// <summary>
@@ -73,7 +73,7 @@ public class EmailServiceClient : IEmailServiceClient
             {
                 return Core.Status.EmailSendResult.Failed;
             }
-        }   
+        }
     }
 
     /// <summary>
@@ -83,7 +83,16 @@ public class EmailServiceClient : IEmailServiceClient
     public async Task<Core.Status.EmailSendResult> GetOperationUpdate(string operationId)
     {
         var operation = new EmailSendOperation(operationId, _emailClient);
-        await operation.UpdateStatusAsync();
+        try
+        {
+            await operation.UpdateStatusAsync();
+        }
+        catch (RequestFailedException e)
+        {
+            _logger.LogError(e, "// EmailServiceClient // GetOperationUpdate // Exception thrown when getting status, OperationId {OperationId}", operationId);
+            return Core.Status.EmailSendResult.Failed;
+        }
+
         if (operation.HasCompleted && operation.HasValue)
         {
             var status = operation.Value.Status;

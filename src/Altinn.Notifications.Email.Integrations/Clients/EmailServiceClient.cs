@@ -128,4 +128,3 @@ public class EmailServiceClient : IEmailServiceClient
         return Core.Status.EmailSendResult.Sending;
     }
 }
-{"id":"2dadb727-84fb-424a-aa7c-97bd68dd75e5","status":"Failed","error":{"code":"EmailDroppedAllRecipientsSuppressed","message":"Message dropped because all recipients were suppressed","target":null,"details":null,"innererror":null}}

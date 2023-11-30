@@ -12,7 +12,7 @@ public interface IEmailServiceClient
     /// Method for requesting the sending of an email.
     /// </summary>
     /// <param name="email">The email text</param>
-    /// <returns>An operation id for tracing the success of the task or emailSendFailResponse if fail</returns>
+    /// <returns>An operation id for tracing the success of the task or EmailClientErrorResponse if fail</returns>
     Task<Result<string, EmailClientErrorResponse>> SendEmail(Sending.Email email);
 
     /// <summary>

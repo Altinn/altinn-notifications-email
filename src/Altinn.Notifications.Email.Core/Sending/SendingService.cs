@@ -58,7 +58,7 @@ public class SendingService : ISendingService
                     ResourceLimitExceeded resourceLimitExceeded = new ResourceLimitExceeded()
                     {
                         Resource = "azure-communication-services-email",
-                        ResetTime = DateTime.UtcNow.AddSeconds(int.Parse(emailSendFailResponse.SendDelay!))
+                        ResetTime = DateTime.UtcNow.AddSeconds(int.Parse(emailSendFailResponse.IntermittentErrorDelay!))
                     };
                     GenericServiceUpdate genericServiceUpdate = new()
                     {

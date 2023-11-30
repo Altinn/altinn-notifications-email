@@ -72,7 +72,7 @@ public class EmailServiceClient : IEmailServiceClient
                 Regex regex = new(@"\d+", RegexOptions.None, TimeSpan.FromMilliseconds(10));
                 Match match = regex.Match(e.Message);
 
-                emailSendFailResponse.SendDelay = match.Success ? match.Value : "60";
+                emailSendFailResponse.IntermittentErrorDelay = match.Success ? match.Value : "60";
                 emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed_TransientError;
             }
             else if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
@@ -122,6 +122,11 @@ public class EmailServiceClient : IEmailServiceClient
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // GetOperationUpdate // Exception thrown when getting status, OperationId {OperationId}", operationId);
+            if (e.ErrorCode == "EmailDroppedAllRecipientsSuppressed")
+            {
+                return Core.Status.EmailSendResult.Failed_SupressedRecipient;
+            }
+
             return Core.Status.EmailSendResult.Failed;
         }
 

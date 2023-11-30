@@ -15,5 +15,5 @@ public class EmailClientErrorResponse
     /// <summary>
     /// The delay in seconds before Azure Communication Services can receive new emails
     /// </summary>
-    public string? SendDelay { get; set; }
+    public string? IntermittentErrorDelay { get; set; }
 }

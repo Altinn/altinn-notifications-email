@@ -33,7 +33,7 @@ public class SendingService : ISendingService
     /// <inheritdoc/>
     public async Task SendAsync(Email email)
     {
-        Result<string, EmailSendFailResponse> result = await _emailServiceClient.SendEmail(email);
+        Result<string, EmailClientErrorResponse> result = await _emailServiceClient.SendEmail(email);
 
         await result.Match(
             async operationId =>

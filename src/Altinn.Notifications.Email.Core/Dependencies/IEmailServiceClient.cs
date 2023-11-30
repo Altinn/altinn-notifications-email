@@ -13,7 +13,7 @@ public interface IEmailServiceClient
     /// </summary>
     /// <param name="email">The email text</param>
     /// <returns>An operation id for tracing the success of the task or emailSendFailResponse if fail</returns>
-    Task<Result<string, EmailSendFailResponse>> SendEmail(Sending.Email email);
+    Task<Result<string, EmailClientErrorResponse>> SendEmail(Sending.Email email);
 
     /// <summary>
     /// Method for retrieving updated send status of an email.

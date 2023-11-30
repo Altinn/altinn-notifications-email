@@ -40,7 +40,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// </summary>
     /// <param name="email">The email</param>
     /// <returns>A Task representing the asyncrhonous operation.</returns>
-    public async Task<Result<string, EmailSendFailResponse>> SendEmail(Core.Sending.Email email)
+    public async Task<Result<string, EmailClientErrorResponse>> SendEmail(Core.Sending.Email email)
     {
         EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
@@ -65,7 +65,7 @@ public class EmailServiceClient : IEmailServiceClient
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
-            EmailSendFailResponse emailSendFailResponse = new();
+            EmailClientErrorResponse emailSendFailResponse = new();
 
             if (e.ErrorCode == "TooManyRequests")
             {
@@ -128,3 +128,4 @@ public class EmailServiceClient : IEmailServiceClient
         return Core.Status.EmailSendResult.Sending;
     }
 }
+{"id":"2dadb727-84fb-424a-aa7c-97bd68dd75e5","status":"Failed","error":{"code":"EmailDroppedAllRecipientsSuppressed","message":"Message dropped because all recipients were suppressed","target":null,"details":null,"innererror":null}}

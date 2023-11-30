@@ -61,7 +61,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
 
             Mock<IEmailServiceClient> clientMock = new();
             clientMock.Setup(c => c.SendEmail(It.IsAny<Notifications.Email.Core.Sending.Email>()))
-                .ReturnsAsync(new EmailSendFailResponse { SendResult = EmailSendResult.Failed_InvalidEmailFormat });
+                .ReturnsAsync(new EmailClientErrorResponse { SendResult = EmailSendResult.Failed_InvalidEmailFormat });
 
             Mock<ICommonProducer> producerMock = new();
             producerMock.Setup(p => p.ProduceAsync(
@@ -89,7 +89,7 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
 
             Mock<IEmailServiceClient> clientMock = new();
             clientMock.Setup(c => c.SendEmail(It.IsAny<Notifications.Email.Core.Sending.Email>()))
-                .ReturnsAsync(new EmailSendFailResponse { SendResult = EmailSendResult.Failed_TransientError, SendDelay = "1000" });
+                .ReturnsAsync(new EmailClientErrorResponse { SendResult = EmailSendResult.Failed_TransientError, SendDelay = "1000" });
 
             Mock<ICommonProducer> producerMock = new();
 

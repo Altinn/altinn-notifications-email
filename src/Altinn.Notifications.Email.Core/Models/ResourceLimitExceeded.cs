@@ -35,32 +35,4 @@ public class ResourceLimitExceeded
     {
         return JsonSerializer.Serialize(this, _serializerOptions);
     }
-
-    /// <summary>
-    /// Try to parse a json string into a<see cref="ResourceLimitExceeded"/>
-    /// </summary>
-    public static bool Tryparse(string input, out ResourceLimitExceeded value)
-    {
-        ResourceLimitExceeded? parsedOutput;
-        value = new ResourceLimitExceeded();
-
-        if (string.IsNullOrEmpty(input))
-        {
-            return false;
-        }
-
-        try
-        {
-            parsedOutput = JsonSerializer.Deserialize<ResourceLimitExceeded>(input!, _serializerOptions);
-
-            value = parsedOutput!;
-            return !string.IsNullOrEmpty(value.Resource);
-        }
-        catch
-        {
-            // try parse, we simply return false if fails
-        }
-
-        return false;
-    }
 }

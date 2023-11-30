@@ -48,32 +48,4 @@ public class GenericServiceUpdate
     {
         return JsonSerializer.Deserialize<GenericServiceUpdate>(serializedString, _serializerOptions);
     }
-
-    /// <summary>
-    /// Try to parse a json string into a<see cref="GenericServiceUpdate"/>
-    /// </summary>
-    public static bool TryParse(string input, out GenericServiceUpdate value)
-    {
-        GenericServiceUpdate? parsedOutput;
-        value = new GenericServiceUpdate();
-
-        if (string.IsNullOrEmpty(input))
-        {
-            return false;
-        }
-
-        try
-        {
-            parsedOutput = Deserialize(input!);
-
-            value = parsedOutput!;
-            return !string.IsNullOrEmpty(value.Source);
-        }
-        catch
-        {
-            // try parse, we simply return false if fails
-        }
-
-        return false;
-    }
 }

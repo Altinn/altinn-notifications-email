@@ -1,5 +1,5 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-
+using System.Text.RegularExpressions;
 using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Sending;
@@ -40,7 +40,7 @@ public class EmailServiceClient : IEmailServiceClient
     /// </summary>
     /// <param name="email">The email</param>
     /// <returns>A Task representing the asyncrhonous operation.</returns>
-    public async Task<Result<string, Core.Status.EmailSendResult>> SendEmail(Core.Sending.Email email)
+    public async Task<Result<string, EmailSendFailResponse>> SendEmail(Core.Sending.Email email)
     {
         EmailContent emailContent = new(email.Subject);
         switch (email.ContentType)
@@ -65,14 +65,26 @@ public class EmailServiceClient : IEmailServiceClient
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
-            if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
+            EmailSendFailResponse emailSendFailResponse = new();
+
+            if (e.ErrorCode == "TooManyRequests")
             {
-                return Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
+                Regex regex = new(@"\d+");
+                Match match = regex.Match(e.Message);
+
+                emailSendFailResponse.SendDelay = match.Success ? match.Value : "60";
+                emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed_TransientError;
+            }
+            else if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
+            {
+                emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
             }
             else
             {
-                return Core.Status.EmailSendResult.Failed;
+                emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed;
             }
+
+            return emailSendFailResponse;
         }
     }
 

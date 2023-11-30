@@ -33,7 +33,7 @@ public class SendingService : ISendingService
     /// <inheritdoc/>
     public async Task SendAsync(Email email)
     {
-        Result<string, EmailSendResult> result = await _emailServiceClient.SendEmail(email);
+        Result<string, EmailSendFailResponse> result = await _emailServiceClient.SendEmail(email);
 
         await result.Match(
             async operationId =>
@@ -46,13 +46,29 @@ public class SendingService : ISendingService
 
                 await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
             },
-            async emailSendResult =>
+            async emailSendFailResponse =>
             {
                 var operationResult = new SendOperationResult()
                 {
                     NotificationId = email.NotificationId,
-                    SendResult = emailSendResult
+                    SendResult = emailSendFailResponse.SendResult
                 };
+                if (emailSendFailResponse.SendResult == EmailSendResult.Failed_TransientError)
+                {
+                    ResourceLimitExceeded resourceLimitExceeded = new ResourceLimitExceeded()
+                    {
+                        Resource = "azure-communication-services-email",
+                        ResetTime = DateTime.UtcNow.AddSeconds(int.Parse(emailSendFailResponse.SendDelay!))
+                    };
+                    GenericServiceUpdate genericServiceUpdate = new()
+                    {
+                        Source = "platform-notifications-email",
+                        Schema = AltinnServiceUpdateSchema.ResourceLimitExceeded,
+                        Data = resourceLimitExceeded.Serialize()
+                    };
+                    string test = genericServiceUpdate.Serialize();
+                    await _producer.ProduceAsync(_settings.AltinnServiceUpdateTopicName, genericServiceUpdate.Serialize());
+                }
 
                 await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
             });

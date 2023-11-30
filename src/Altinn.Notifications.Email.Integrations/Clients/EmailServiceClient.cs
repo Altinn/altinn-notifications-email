@@ -69,7 +69,7 @@ public class EmailServiceClient : IEmailServiceClient
 
             if (e.ErrorCode == "TooManyRequests")
             {
-                Regex regex = new(@"\d+");
+                Regex regex = new(@"\d+", RegexOptions.None, TimeSpan.FromMilliseconds(10));
                 Match match = regex.Match(e.Message);
 
                 emailSendFailResponse.SendDelay = match.Success ? match.Value : "60";

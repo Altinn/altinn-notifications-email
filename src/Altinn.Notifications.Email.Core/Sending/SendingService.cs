@@ -66,7 +66,7 @@ public class SendingService : ISendingService
                         Schema = AltinnServiceUpdateSchema.ResourceLimitExceeded,
                         Data = resourceLimitExceeded.Serialize()
                     };
-                    string test = genericServiceUpdate.Serialize();
+                    
                     await _producer.ProduceAsync(_settings.AltinnServiceUpdateTopicName, genericServiceUpdate.Serialize());
                 }
 

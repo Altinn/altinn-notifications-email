@@ -40,12 +40,4 @@ public class GenericServiceUpdate
     {
         return JsonSerializer.Serialize(this, _serializerOptions);
     }
-
-    /// <summary>
-    /// Deserialize a json string into the <see cref="GenericServiceUpdate"/>
-    /// </summary>
-    public static GenericServiceUpdate? Deserialize(string serializedString)
-    {
-        return JsonSerializer.Deserialize<GenericServiceUpdate>(serializedString, _serializerOptions);
-    }
 }

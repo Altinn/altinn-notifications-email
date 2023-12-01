@@ -10,7 +10,7 @@ public class EmailClientErrorResponse
     /// <summary>
     /// Result for the email send operation
     /// </summary>
-    public EmailSendResult? SendResult { get; set; }
+    public EmailSendResult SendResult { get; set; }
 
     /// <summary>
     /// The delay in seconds before Azure Communication Services can receive new emails

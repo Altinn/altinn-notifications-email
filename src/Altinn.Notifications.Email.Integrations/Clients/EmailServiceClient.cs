@@ -66,22 +66,14 @@ public class EmailServiceClient : IEmailServiceClient
         {
             _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
             EmailClientErrorResponse emailSendFailResponse = new();
+            emailSendFailResponse.SendResult = GetEmailSendResult(e);
 
-            if (e.ErrorCode == "TooManyRequests")
+            if (emailSendFailResponse.SendResult == Core.Status.EmailSendResult.Failed_TransientError)
             {
                 Regex regex = new(@"\d+", RegexOptions.None, TimeSpan.FromMilliseconds(10));
                 Match match = regex.Match(e.Message);
 
                 emailSendFailResponse.IntermittentErrorDelay = match.Success ? match.Value : "60";
-                emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed_TransientError;
-            }
-            else if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
-            {
-                emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
-            }
-            else
-            {
-                emailSendFailResponse.SendResult = Core.Status.EmailSendResult.Failed;
             }
 
             return emailSendFailResponse;
@@ -122,14 +114,27 @@ public class EmailServiceClient : IEmailServiceClient
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // GetOperationUpdate // Exception thrown when getting status, OperationId {OperationId}", operationId);
-            if (e.ErrorCode == "EmailDroppedAllRecipientsSuppressed")
-            {
-                return Core.Status.EmailSendResult.Failed_SupressedRecipient;
-            }
-
-            return Core.Status.EmailSendResult.Failed;
+            return GetEmailSendResult(e);
         }
 
         return Core.Status.EmailSendResult.Sending;
+    }
+
+    private Core.Status.EmailSendResult GetEmailSendResult(RequestFailedException e)
+    {
+        if (e.ErrorCode == "TooManyRequests")
+        {
+            return Core.Status.EmailSendResult.Failed_TransientError;
+        }
+        else if (e.ErrorCode == "EmailDroppedAllRecipientsSuppressed")
+        {
+            return Core.Status.EmailSendResult.Failed_SupressedRecipient;
+        }
+        else if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
+        {
+            return Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
+        }
+        
+        return Core.Status.EmailSendResult.Failed;
     }
 }

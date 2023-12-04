@@ -31,7 +31,7 @@ public enum EmailSendResult
     Failed_InvalidEmailFormat,
 
     /// <summary>
-    /// Failed, all recipients were suppressed"
+    /// Failed, recipient was suppressed
     /// </summary>
     Failed_SupressedRecipient,
 

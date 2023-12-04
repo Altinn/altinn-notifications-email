@@ -48,27 +48,29 @@ public class SendingService : ISendingService
             },
             async emailSendFailResponse =>
             {
-                var operationResult = new SendOperationResult()
-                {
-                    NotificationId = email.NotificationId,
-                    SendResult = emailSendFailResponse.SendResult
-                };
                 if (emailSendFailResponse.SendResult == EmailSendResult.Failed_TransientError)
                 {
                     ResourceLimitExceeded resourceLimitExceeded = new ResourceLimitExceeded()
                     {
                         Resource = "azure-communication-services-email",
-                        ResetTime = DateTime.UtcNow.AddSeconds(int.Parse(emailSendFailResponse.IntermittentErrorDelay!))
+                        ResetTime = DateTime.UtcNow.AddSeconds((double)emailSendFailResponse.IntermittentErrorDelay!)
                     };
+
                     GenericServiceUpdate genericServiceUpdate = new()
                     {
                         Source = "platform-notifications-email",
                         Schema = AltinnServiceUpdateSchema.ResourceLimitExceeded,
                         Data = resourceLimitExceeded.Serialize()
                     };
-                    
+
                     await _producer.ProduceAsync(_settings.AltinnServiceUpdateTopicName, genericServiceUpdate.Serialize());
                 }
+
+                var operationResult = new SendOperationResult()
+                {
+                    NotificationId = email.NotificationId,
+                    SendResult = emailSendFailResponse.SendResult
+                };
 
                 await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
             });

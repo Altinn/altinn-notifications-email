@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
+
 using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Sending;
@@ -70,10 +71,7 @@ public class EmailServiceClient : IEmailServiceClient
 
             if (emailSendFailResponse.SendResult == Core.Status.EmailSendResult.Failed_TransientError)
             {
-                Regex regex = new(@"\d+", RegexOptions.None, TimeSpan.FromMilliseconds(10));
-                Match match = regex.Match(e.Message);
-
-                emailSendFailResponse.IntermittentErrorDelay = match.Success ? match.Value : "60";
+                emailSendFailResponse.IntermittentErrorDelay = GetDelayFromString(e.Message);
             }
 
             return emailSendFailResponse;
@@ -98,17 +96,14 @@ public class EmailServiceClient : IEmailServiceClient
                 {
                     return Core.Status.EmailSendResult.Succeeded;
                 }
-                else if (status == EmailSendStatus.Failed || status == EmailSendStatus.Canceled)
-                {
-                    // TODO: check the reasons for failure to create reasonable types
-                    var response = operation.WaitForCompletionResponse();
-                    _logger.LogError(
-                        "// EmailServiceClient // GetOperationUpdate // Operation {OperationId} failed with status {Status} and reason phrase {Reason}",
-                        operationId,
-                        status,
-                        response.ReasonPhrase);
-                    return Core.Status.EmailSendResult.Failed;
-                }
+
+                var response = operation.WaitForCompletionResponse();
+                _logger.LogError(
+                    "// EmailServiceClient // GetOperationUpdate // Operation {OperationId} failed with status {Status} and reason phrase {Reason}",
+                    operationId,
+                    status,
+                    response.ReasonPhrase);
+                return Core.Status.EmailSendResult.Failed;
             }
         }
         catch (RequestFailedException e)
@@ -134,7 +129,24 @@ public class EmailServiceClient : IEmailServiceClient
         {
             return Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
         }
-        
+
         return Core.Status.EmailSendResult.Failed;
+    }
+
+    /// <summary>
+    /// Gets the int proceeding the word seconds in the string.
+    /// </summary>
+    /// <param name="message">The messsage to find delay within</param>
+    /// <returns></returns>
+    internal static int GetDelayFromString(string message)
+    {
+        var secondsString = Regex.Match(
+                message,
+                @"(\d+)[^,.\d\n]+?(?=seconds)|(?<=seconds)[^,.\d\n]+?(\d+)",
+                RegexOptions.None,
+                TimeSpan.FromMilliseconds(10))
+                .Value;
+
+        return string.IsNullOrEmpty(secondsString) ? 60 : int.Parse(secondsString);
     }
 }

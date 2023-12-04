@@ -33,6 +33,21 @@ public class SendingService : ISendingService
     /// <inheritdoc/>
     public async Task SendAsync(Email email)
     {
+        ResourceLimitExceeded resourceLimitExceeded = new ResourceLimitExceeded()
+        {
+            Resource = "azure-communication-services-email",
+            ResetTime = DateTime.UtcNow.AddSeconds(900)
+        };
+
+        GenericServiceUpdate genericServiceUpdate = new()
+        {
+            Source = "platform-notifications-email",
+            Schema = AltinnServiceUpdateSchema.ResourceLimitExceeded,
+            Data = resourceLimitExceeded.Serialize()
+        };
+
+        await _producer.ProduceAsync(_settings.AltinnServiceUpdateTopicName, genericServiceUpdate.Serialize());
+
         Result<string, EmailClientErrorResponse> result = await _emailServiceClient.SendEmail(email);
 
         await result.Match(

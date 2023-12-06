@@ -34,7 +34,7 @@ public class SendingService : ISendingService
     public async Task SendAsync(Email email)
     {
         Result<string, EmailClientErrorResponse> result = await _emailServiceClient.SendEmail(email);
-
+        throw new Exception("Test exception");
         await result.Match(
             async operationId =>
             {

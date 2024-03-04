@@ -1,0 +1,29 @@
+﻿using Altinn.Notifications.Email.Core.Status;
+
+using Azure.Messaging.EventGrid.SystemEvents;
+using Xunit;
+
+namespace Altinn.Notifications.Email.Tests.Email.Core.TestingStatus;
+
+public class EmailSendResultMapperTests
+{
+    [Theory]
+    [InlineData("Bounced", EmailSendResult.Failed_Bounced)]
+    [InlineData("Delivered", EmailSendResult.Delivered)]
+    [InlineData("Failed", EmailSendResult.Failed)]
+    [InlineData("FilteredSpam", EmailSendResult.Failed_FilteredSpam)]
+    [InlineData("Quarantined", EmailSendResult.Failed_Quarantined)]
+    [InlineData("Suppressed", EmailSendResult.Failed_SupressedRecipient)]
+    public void ParseDeliveryStatus_ReturnsCorrectResult(string deliveryStatus, EmailSendResult expectedResult)
+    {
+        var result = EmailSendResultMapper.ParseDeliveryStatus(new AcsEmailDeliveryReportStatus(deliveryStatus));
+        Assert.Equal(expectedResult, result);
+    }
+
+    [Fact]
+    public void ParseDeliveryStatus_UnhandledStatus_ThrowsArgumentException()
+    {
+        var unhandledStatus = new AcsEmailDeliveryReportStatus("unhandled");
+        Assert.Throws<ArgumentException>(() => EmailSendResultMapper.ParseDeliveryStatus(unhandledStatus));
+    }
+}

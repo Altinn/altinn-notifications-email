@@ -1,5 +1,5 @@
 ﻿using Altinn.Notifications.Email.Core;
-using Azure.Messaging.EventGrid;
+using Azure.Messaging.EventGrid; 
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
 

@@ -19,33 +19,23 @@ public static class EmailSendResultMapper
         {
             return EmailSendResult.Failed;
         }
-        else if (deliveryStatus.Equals(AcsEmailDeliveryReportStatus.Bounced))
+
+        switch (deliveryStatus.ToString())
         {
-            return EmailSendResult.Failed_Bounced;
-        }
-        else if (deliveryStatus.Equals(AcsEmailDeliveryReportStatus.Delivered))
-        {
-            return EmailSendResult.Delivered;
-        }
-        else if (deliveryStatus.Equals(AcsEmailDeliveryReportStatus.Failed))
-        {
-            return EmailSendResult.Failed;
-        }
-        else if (deliveryStatus.Equals(AcsEmailDeliveryReportStatus.FilteredSpam))
-        {
-            return EmailSendResult.Failed_FilteredSpam;
-        }
-        else if (deliveryStatus.Equals(AcsEmailDeliveryReportStatus.Quarantined))
-        {
-            return EmailSendResult.Failed_Quarantined;
-        }
-        else if (deliveryStatus.Equals(AcsEmailDeliveryReportStatus.Suppressed))
-        {
-            return EmailSendResult.Failed_SupressedRecipient;
-        }
-        else
-        {
-            throw new ArgumentException($"Unhandled DeliveryStatus: {deliveryStatus}");
+            case "Bounced":
+                return EmailSendResult.Failed_Bounced;
+            case "Delivered":
+                return EmailSendResult.Delivered;
+            case "Failed":
+                return EmailSendResult.Failed;
+            case "FilteredSpam":
+                return EmailSendResult.Failed_FilteredSpam;
+            case "Quarantined":
+                return EmailSendResult.Failed_Quarantined;
+            case "Suppressed":
+                return EmailSendResult.Failed_SupressedRecipient;
+            default:
+                throw new ArgumentException($"Unhandled DeliveryStatus: {deliveryStatus}");
         }
     }
 }

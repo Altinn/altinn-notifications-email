@@ -1,4 +1,4 @@
-﻿using Azure.Messaging.EventGrid;
+﻿using Altinn.Notifications.Email.Core.Status;
 
 namespace Altinn.Notifications.Email.Core;
 
@@ -15,9 +15,9 @@ public interface IStatusService
     Task UpdateSendStatus(SendNotificationOperationIdentifier operationIdentifier);
 
     /// <summary>
-    /// Process delivery reports received from Azure Communication Service
+    /// Updates the send status of an email, received from Azure Communication Service
     /// </summary>
-    /// <param name="eventList">List of delivery reports</param>
-    /// <returns>ValidationResponse when type is SubscriptionValidation, else empty string</returns>
-    Task<string> ProcessDeliveryReports(EventGridEvent[] eventList);
+    /// <param name="sendOperationResult">OperationResult with status and operationId</param>
+    /// <returns>A task representing the asynchronous operation</returns>
+    Task UpdateSendStatus(SendOperationResult sendOperationResult);
 }

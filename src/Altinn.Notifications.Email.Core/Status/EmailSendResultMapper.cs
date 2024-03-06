@@ -1,6 +1,4 @@
-﻿using Azure.Messaging.EventGrid.SystemEvents;
-
-namespace Altinn.Notifications.Email.Core.Status;
+﻿namespace Altinn.Notifications.Email.Core.Status;
 
 /// <summary>
 /// Mapper handling parsing to EmailSendResult
@@ -13,15 +11,12 @@ public static class EmailSendResultMapper
     /// <param name="deliveryStatus">Delivery status from Azure Communication Service</param>
     /// <returns></returns>
     /// <exception cref="ArgumentException">Throws exception if unknown delivery status</exception>
-    public static EmailSendResult ParseDeliveryStatus(AcsEmailDeliveryReportStatus? deliveryStatus)
+    public static EmailSendResult ParseDeliveryStatus(string? deliveryStatus)
     {
-        if (deliveryStatus == null)
+        switch (deliveryStatus)
         {
-            return EmailSendResult.Failed;
-        }
-
-        switch (deliveryStatus.ToString())
-        {
+            case null: 
+                return EmailSendResult.Failed;
             case "Bounced":
                 return EmailSendResult.Failed_Bounced;
             case "Delivered":

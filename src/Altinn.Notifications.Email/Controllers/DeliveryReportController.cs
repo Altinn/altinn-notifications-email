@@ -1,5 +1,11 @@
-﻿using Altinn.Notifications.Email.Core;
-using Azure.Messaging.EventGrid; 
+﻿using System.Text.Json;
+
+using Altinn.Notifications.Email.Core;
+using Altinn.Notifications.Email.Core.Status;
+
+using Azure.Messaging.EventGrid;
+using Azure.Messaging.EventGrid.SystemEvents;
+
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
 
@@ -32,6 +38,31 @@ public class DeliveryReportController
     [SwaggerResponse(400, "The delivery report is invalid")]
     public async Task<ActionResult<string>> Post([FromBody] EventGridEvent[] eventList)
     {
-        return await _statusService.ProcessDeliveryReports(eventList);
+        foreach (EventGridEvent eventgridevent in eventList)
+        {
+            // If the event is a system event, TryGetSystemEventData will return the deserialized system event
+            if (eventgridevent.TryGetSystemEventData(out object systemEvent))
+            {
+                switch (systemEvent)
+                {
+                    case SubscriptionValidationEventData subscriptionValidated:
+                        var responseData = new SubscriptionValidationResponse()
+                        {
+                            ValidationResponse = subscriptionValidated.ValidationCode
+                        };
+                        return JsonSerializer.Serialize(responseData);
+                    case AcsEmailDeliveryReportReceivedEventData deliveryReport:
+                        var operationResult = new SendOperationResult()
+                        {
+                            OperationId = deliveryReport.MessageId,
+                            SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString())
+                        };
+                        await _statusService.UpdateSendStatus(operationResult);
+                        break;
+                }
+            }
+        }
+
+        return string.Empty;
     }
 }

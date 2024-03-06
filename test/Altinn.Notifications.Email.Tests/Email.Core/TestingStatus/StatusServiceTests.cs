@@ -3,8 +3,6 @@ using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Status;
 
-using Azure.Messaging.EventGrid;
-
 using Moq;
 using Xunit;
 
@@ -13,8 +11,6 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending;
 public class StatusServiceTests
 {
     private readonly TopicSettings _topicSettings;
-    private readonly string _validationEvent = "[{\"id\": \"2d1781af-3a4c-4d7c-bd0c-e34b19da4e66\",\"topic\": \"/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\",\"subject\": \"\",\"data\": {\"validationCode\": \"512d38b6-c7b8-40c8-89fe-f46f9e9622b6\",\"validationUrl\": \"https://rp-eastus2.eventgrid.azure.net:553/eventsubscriptions/myeventsub/validate?id=0000000000-0000-0000-0000-00000000000000&t=2022-10-28T04:23:35.1981776Z&apiVersion=2018-05-01-preview&token=1A1A1A1A\"},\"eventType\": \"Microsoft.EventGrid.SubscriptionValidationEvent\",\"eventTime\": \"2022-10-28T04:23:35.1981776Z\",\"metadataVersion\": \"1\",\"dataVersion\": \"1\"}]";
-    private readonly string _deliveryReportEvent = "[{\"id\": \"00000000-0000-0000-0000-000000000000\",\"topic\": \"/subscriptions/{subscription-id}/resourceGroups/{group-name}/providers/microsoft.communication/communicationservices/{communication-services-resource-name}\", \"subject\": \"sender/senderid@azure.com/message/00000000-0000-0000-0000-000000000000\", \"data\": {\"sender\": \"senderid@azure.com\", \"recipient\": \"receiver@azure.com\", \"messageId\": \"00000000-0000-0000-0000-000000000000\",\"status\": \"Delivered\", \"deliveryStatusDetails\": {\"statusMessage\": \"Status Message\"},\"deliveryAttemptTimeStamp\": \"2020-09-18T00:22:20.2855749+00:00\"},\"eventType\": \"Microsoft.Communication.EmailDeliveryReportReceived\",\"dataVersion\": \"1.0\",\"metadataVersion\": \"1\",\"eventTime\": \"2020-09-18T00:22:20.822Z\"}]";
 
     public StatusServiceTests()
     {
@@ -102,23 +98,14 @@ public class StatusServiceTests
     }
 
     [Fact]
-    public async Task ProcessDeliveryReports_EventTypeIsValidation_ValidationResponseReturned()
+    public async Task UpdateSendStatus_PublishedToExpectedKafkaTopic()
     {
-        Mock<IEmailServiceClient> clientMock = new();
-        Mock<ICommonProducer> producerMock = new();
-        Mock<IDateTimeService> dateTimeMock = new();
+        SendOperationResult result = new()
+        {
+            OperationId = "00000000-0000-0000-0000-000000000000",
+            SendResult = EmailSendResult.Delivered
+        };
 
-        StatusService statusService = new(clientMock.Object, producerMock.Object, dateTimeMock.Object, _topicSettings);
-
-        string result = await statusService.ProcessDeliveryReports(EventGridEvent.ParseMany(BinaryData.FromString(_validationEvent)));
-
-        Assert.NotNull(result);
-        Assert.Contains("\"validationResponse\":\"512d38b6-c7b8-40c8-89fe-f46f9e9622b6\"", result);
-    }
-
-    [Fact]
-    public async Task ProcessDeliveryReports_OperationResultGenerated_PublishedToExpectedKafkaTopic()
-    {
         Mock<IEmailServiceClient> clientMock = new();
 
         Mock<ICommonProducer> producerMock = new();
@@ -132,7 +119,7 @@ public class StatusServiceTests
 
         StatusService statusService = new(clientMock.Object, producerMock.Object, dateTimeMock.Object, _topicSettings);
 
-        string result = await statusService.ProcessDeliveryReports(EventGridEvent.ParseMany(BinaryData.FromString(_deliveryReportEvent)));
+        await statusService.UpdateSendStatus(result);
 
         producerMock.VerifyAll();
         Assert.NotNull(result);

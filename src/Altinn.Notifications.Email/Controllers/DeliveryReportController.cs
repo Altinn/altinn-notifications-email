@@ -20,7 +20,7 @@ namespace Altinn.Notifications.Email.Controllers;
 [SwaggerResponse(401, "Caller is unauthorized")]
 public class DeliveryReportController : ControllerBase
 {
-    private ILogger<DeliveryReportController> _logger;
+    private readonly ILogger<DeliveryReportController> _logger;
     private readonly IStatusService _statusService;
 
     /// <summary>
@@ -69,7 +69,7 @@ public class DeliveryReportController : ControllerBase
                         {
                             _logger.LogError(
                                 ex, 
-                                "// DeliveryReportController // Post // Unknown deliverystatus (OperationId: '{operationId}'). Delivery status: {status}", 
+                                "// DeliveryReportController // Post // Unknown deliverystatus (OperationId: '{OperationId}'). Delivery status: {Status}", 
                                 deliveryReport.MessageId, 
                                 deliveryReport.Status.ToString());
                         }

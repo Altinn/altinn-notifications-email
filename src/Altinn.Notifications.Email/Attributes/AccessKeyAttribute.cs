@@ -15,9 +15,10 @@ public class AccessKeyAttribute : Attribute, IAsyncActionFilter
     /// </summary>
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        EmailDeliveryReportSettings authSettings = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>()!.GetSection("EmailDeliveryReportSettings").Get<EmailDeliveryReportSettings>()!;
+        EmailDeliveryReportSettings emailDeliveryReportSettings = 
+            context.HttpContext.RequestServices.GetRequiredService<IConfiguration>()!.GetSection("EmailDeliveryReportSettings").Get<EmailDeliveryReportSettings>()!;
         string? accessKey = context.HttpContext.Request.Query["accesskey"];
-        if (accessKey != authSettings.AccessKey)
+        if (accessKey != emailDeliveryReportSettings.AccessKey)
         {
             context.HttpContext.Response.StatusCode = 401;
             await context.HttpContext.Response.WriteAsync("Unauthorized client");

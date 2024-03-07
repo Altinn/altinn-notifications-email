@@ -72,6 +72,7 @@ public class DeliveryReportController : ControllerBase
                                 "// DeliveryReportController // Post // Unknown deliverystatus (OperationId: '{OperationId}'). Delivery status: {Status}", 
                                 deliveryReport.MessageId, 
                                 deliveryReport.Status.ToString());
+                            throw;
                         }
 
                         break;

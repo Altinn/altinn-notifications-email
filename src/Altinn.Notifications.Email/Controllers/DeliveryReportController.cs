@@ -1,5 +1,5 @@
 ﻿using System.Text.Json;
-
+using Altinn.Notifications.Email.Attributes;
 using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Status;
 
@@ -16,8 +16,9 @@ namespace Altinn.Notifications.Email.Controllers;
 /// </summary>
 [Route("notifications/email/api/v1/reports")]
 [ApiController]
+[AccessKey]
 [SwaggerResponse(401, "Caller is unauthorized")]
-public class DeliveryReportController
+public class DeliveryReportController : ControllerBase
 {
     private readonly IStatusService _statusService;
 

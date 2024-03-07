@@ -1,4 +1,6 @@
-﻿namespace Altinn.Notifications.Email.Core.Status;
+﻿using Altinn.Notifications.Email.Core.Status;
+
+namespace Altinn.Notifications.Email.Mappers;
 
 /// <summary>
 /// Mapper handling parsing to EmailSendResult

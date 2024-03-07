@@ -2,7 +2,7 @@
 using Altinn.Notifications.Email.Attributes;
 using Altinn.Notifications.Email.Core;
 using Altinn.Notifications.Email.Core.Status;
-
+using Altinn.Notifications.Email.Mappers;
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.EventGrid.SystemEvents;
 
@@ -20,13 +20,15 @@ namespace Altinn.Notifications.Email.Controllers;
 [SwaggerResponse(401, "Caller is unauthorized")]
 public class DeliveryReportController : ControllerBase
 {
+    private ILogger<DeliveryReportController> _logger;
     private readonly IStatusService _statusService;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DeliveryReportController"/> class.
     /// </summary>
-    public DeliveryReportController(IStatusService statusService)
+    public DeliveryReportController(ILogger<DeliveryReportController> logger, IStatusService statusService)
     {
+        _logger = logger;
         _statusService = statusService;
     }
 
@@ -46,6 +48,7 @@ public class DeliveryReportController : ControllerBase
             {
                 switch (systemEvent)
                 {
+                    // To complete the validation handshake from Azure Event Grid, the subscriber must respond with validation code
                     case SubscriptionValidationEventData subscriptionValidated:
                         var responseData = new SubscriptionValidationResponse()
                         {
@@ -53,12 +56,24 @@ public class DeliveryReportController : ControllerBase
                         };
                         return JsonSerializer.Serialize(responseData);
                     case AcsEmailDeliveryReportReceivedEventData deliveryReport:
-                        var operationResult = new SendOperationResult()
+                        try 
+                        { 
+                            var operationResult = new SendOperationResult()
+                            {
+                                OperationId = deliveryReport.MessageId,
+                                SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString())
+                            };
+                            await _statusService.UpdateSendStatus(operationResult);    
+                        } 
+                        catch (ArgumentException ex)
                         {
-                            OperationId = deliveryReport.MessageId,
-                            SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString())
-                        };
-                        await _statusService.UpdateSendStatus(operationResult);
+                            _logger.LogError(
+                                ex, 
+                                "// DeliveryReportController // Post // Unknown deliverystatus (OperationId: '{operationId}'). Delivery status: {status}", 
+                                deliveryReport.MessageId, 
+                                deliveryReport.Status.ToString());
+                        }
+
                         break;
                 }
             }

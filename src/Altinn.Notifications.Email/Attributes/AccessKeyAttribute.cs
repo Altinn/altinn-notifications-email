@@ -15,7 +15,7 @@ public class AccessKeyAttribute : Attribute, IAsyncActionFilter
     /// </summary>
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        AuthSettings authSettings = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>()!.GetSection("AuthSettings").Get<AuthSettings>()!;
+        EmailDeliveryReportSettings authSettings = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>()!.GetSection("EmailDeliveryReportSettings").Get<EmailDeliveryReportSettings>()!;
         string? accessKey = context.HttpContext.Request.Query["accesskey"];
         if (accessKey != authSettings.AccessKey)
         {

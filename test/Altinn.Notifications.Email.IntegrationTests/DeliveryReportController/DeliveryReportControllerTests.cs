@@ -103,7 +103,7 @@ public class DeliveryReportControllerTests : IClassFixture<IntegrationTestWebApp
 
             builder.ConfigureTestServices(services =>
             {
-                services.Configure<AuthSettings>(opts =>
+                services.Configure<EmailDeliveryReportSettings>(opts =>
                 {
                     opts.AccessKey = "accesskey";
                 });

@@ -73,7 +73,7 @@ dotnet user-secrets set "CommunicationServicesSettings:ConnectionString" "insert
 
 ### Running the application with .NET
 
-The Notifications components can be run locally when developing/debugging. Follow the install steps above if this has not already been done.
+The Notifications Email component can be run locally when developing/debugging. Follow the install steps above if this has not already been done.
 
 - Navigate to _src/Altinn.Notifications.Email_, and build and run the code from there, or run the solution using you selected code editor
 

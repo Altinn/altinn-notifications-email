@@ -58,7 +58,7 @@ Kafdrop is not available at http://localhost:9000.
 ### Set up Azure Communication Services
 
 If you need working end to end functionality when working on
-Notifications Email Azure Communication Services (ACS) needs to be set up. *
+Notifications Email Azure Communication Services (ACS) needs to be set up.
 
 Set up a service in your personal Azure account or use an existing service in a test environment.
 Find the connection string in the Azure Portal under _Settings_ -> _Keys_ and add this to the configuration values.

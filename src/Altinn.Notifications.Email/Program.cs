@@ -5,14 +5,11 @@ using Altinn.Notifications.Email.Core.Configuration;
 using Altinn.Notifications.Email.Health;
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Telemetry;
+
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using Azure.Security.KeyVault.Secrets;
 
-using Microsoft.ApplicationInsights.AspNetCore.Extensions;
-using Microsoft.ApplicationInsights.Channel;
-using Microsoft.ApplicationInsights.Extensibility;
-using Microsoft.ApplicationInsights.WindowsServer.TelemetryChannel;
 using Microsoft.Extensions.FileProviders;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;

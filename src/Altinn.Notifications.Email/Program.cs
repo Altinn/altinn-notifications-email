@@ -50,7 +50,7 @@ if (app.Environment.IsDevelopment())
 
 Configure();
 
-app.Run();
+await app.RunAsync();
 
 void ConfigureWebHostCreationLogging()
 {

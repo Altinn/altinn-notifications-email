@@ -56,7 +56,7 @@ namespace Altinn.Notifications.Email.Telemetry
 
         private static bool ExcludeRequest(string? localpath)
         {
-            if (!string.IsNullOrEmpty(localpath))
+            if (string.IsNullOrEmpty(localpath))
             {
                 return false;
             }

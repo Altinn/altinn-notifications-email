@@ -9,7 +9,6 @@ using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Azure;
 using Azure.Communication.Email;
-
 using Microsoft.Extensions.Logging;
 
 namespace Altinn.Notifications.Email.Integrations.Clients;
@@ -109,7 +108,15 @@ public class EmailServiceClient : IEmailServiceClient
         }
         catch (RequestFailedException e)
         {
-            _logger.LogError(e, "// EmailServiceClient // GetOperationUpdate // Exception thrown when getting status, OperationId {OperationId}", operationId);
+            if (e.ErrorCode == ErrorTypes.RecipientsSuppressedErrorCode)
+            {
+                _logger.LogWarning("A request failed because the recipient is on the suppression list of Azure Communcation Services, OperationId {OperationId}", operationId);
+            }
+            else
+            {
+                _logger.LogError(e, "// EmailServiceClient // GetOperationUpdate // Exception thrown when getting status, OperationId {OperationId}", operationId);
+            }
+
             return GetEmailSendResult(e);
         }
 

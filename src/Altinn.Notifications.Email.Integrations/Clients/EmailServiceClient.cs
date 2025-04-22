@@ -65,8 +65,10 @@ public class EmailServiceClient : IEmailServiceClient
         catch (RequestFailedException e)
         {
             _logger.LogError(e, "// EmailServiceClient // SendEmail // Failed to send email, NotificationId {NotificationId}", email.NotificationId);
-            EmailClientErrorResponse emailSendFailResponse = new();
-            emailSendFailResponse.SendResult = GetEmailSendResult(e);
+            EmailClientErrorResponse emailSendFailResponse = new()
+            {
+                SendResult = GetEmailSendResult(e)
+            };
 
             if (emailSendFailResponse.SendResult == Core.Status.EmailSendResult.Failed_TransientError)
             {

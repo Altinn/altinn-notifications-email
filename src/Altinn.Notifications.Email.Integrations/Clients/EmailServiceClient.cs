@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Altinn.Notifications.Email.Core.Dependencies;
 using Altinn.Notifications.Email.Core.Models;
 using Altinn.Notifications.Email.Core.Sending;
+using Altinn.Notifications.Email.Integrations.Clients.AzureCommunicationServices;
 using Altinn.Notifications.Email.Integrations.Configuration;
 
 using Azure;
@@ -22,8 +23,6 @@ public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;
     private readonly ILogger<IEmailServiceClient> _logger;
-
-    private readonly string _failedInvalidEmailFormatErrorMessage = "Invalid format for email address";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
@@ -115,22 +114,28 @@ public class EmailServiceClient : IEmailServiceClient
         return Core.Status.EmailSendResult.Sending;
     }
 
-    private Core.Status.EmailSendResult GetEmailSendResult(RequestFailedException e)
+    private static Core.Status.EmailSendResult GetEmailSendResult(RequestFailedException e)
     {
-        if (e.ErrorCode == "TooManyRequests")
+        Core.Status.EmailSendResult emailSendResult;
+
+        if (e.ErrorCode == ErrorTypes.ExcessiveCallVolumeErrorCode)
         {
-            return Core.Status.EmailSendResult.Failed_TransientError;
+            emailSendResult = Core.Status.EmailSendResult.Failed_TransientError;
         }
-        else if (e.ErrorCode == "EmailDroppedAllRecipientsSuppressed")
+        else if (e.ErrorCode == ErrorTypes.RecipientsSuppressedErrorCode)
         {
-            return Core.Status.EmailSendResult.Failed_SupressedRecipient;
+            emailSendResult = Core.Status.EmailSendResult.Failed_SupressedRecipient;
         }
-        else if (e.Message.Contains(_failedInvalidEmailFormatErrorMessage))
+        else if (e.Message.Contains(ErrorTypes.InvalidEmailFormatErrorMessage))
         {
-            return Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
+            emailSendResult = Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
+        }
+        else
+        {
+            emailSendResult = Core.Status.EmailSendResult.Failed;
         }
 
-        return Core.Status.EmailSendResult.Failed;
+        return emailSendResult;
     }
 
     /// <summary>

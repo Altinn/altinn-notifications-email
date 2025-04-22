@@ -68,7 +68,7 @@ async Task SetConfigurationProviders(ConfigurationManager config)
 {
     if (Directory.Exists("/altinn-appsettings"))
     {
-        logger.LogWarning("Reading altinn-dbsettings-secret.json.");
+        logger.LogInformation("Reading altinn-dbsettings-secret.json.");
         IFileProvider fileProvider = new PhysicalFileProvider("/altinn-appsettings");
         config.AddJsonFile(fileProvider, "altinn-dbsettings-secret.json", optional: true, reloadOnChange: true);
     }

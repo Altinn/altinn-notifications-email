@@ -21,14 +21,14 @@ namespace Altinn.Notifications.Email.Integrations.Clients;
 public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;
-    private readonly ILogger<IEmailServiceClient> _logger;
+    private readonly ILogger<EmailServiceClient> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
     /// </summary>
     /// <param name="communicationServicesSettings">Settings for integration against Communication Services.</param>
     /// <param name="logger">A logger</param>
-    public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings, ILogger<IEmailServiceClient> logger)
+    public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings, ILogger<EmailServiceClient> logger)
     {
         _emailClient = new EmailClient(communicationServicesSettings.ConnectionString);
         _logger = logger;

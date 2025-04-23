@@ -97,7 +97,7 @@ public class EmailServiceClient : IEmailServiceClient
                     return Core.Status.EmailSendResult.Succeeded;
                 }
 
-                var response = operation.WaitForCompletionResponse();
+                var response = await operation.WaitForCompletionResponseAsync();
                 _logger.LogError(
                     "// EmailServiceClient // GetOperationUpdate // Operation {OperationId} failed with status {Status} and reason phrase {Reason}",
                     operationId,

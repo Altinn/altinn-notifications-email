@@ -61,7 +61,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var httpClient = GetTestClient(sendingServiceMock.Object);
 
         // Act
-        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
+        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail", instantEmailRequest);
 
         // Assert
         Assert.Equal((HttpStatusCode)499, response.StatusCode);
@@ -96,7 +96,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var httpClient = GetTestClient(sendingServiceMock.Object);
 
         // Act
-        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
+        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail", instantEmailRequest);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -136,7 +136,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
 
         // Act
-        var response = await httpClient.PostAsync("/notifications/email/api/v1/instantemail/send", content);
+        var response = await httpClient.PostAsync("/notifications/email/api/v1/instantemail", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -171,7 +171,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var httpClient = GetTestClient(sendingServiceMock.Object);
 
         // Act
-        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
+        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail", instantEmailRequest);
 
         // Assert
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
@@ -200,7 +200,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var httpClient = GetTestClient(sendingServiceMock.Object);
 
         // Act
-        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
+        var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail", instantEmailRequest);
 
         // Assert
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
@@ -232,7 +232,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var httpClient = GetTestClient(sendingServiceMock.Object);
 
         // Act
-        await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
+        await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail", instantEmailRequest);
 
         // Assert
         Assert.NotNull(capturedEmail);

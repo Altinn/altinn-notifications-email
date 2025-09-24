@@ -12,7 +12,7 @@ namespace Altinn.Notifications.Email.Controllers;
 /// </summary>
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
-[Route("notifications/email/api/v1/instantemail/")]
+[Route("notifications/email/api/v1/instantemail")]
 public class InstantEmailController : ControllerBase
 {
     private readonly ISendingService _sendingService;
@@ -34,7 +34,7 @@ public class InstantEmailController : ControllerBase
     /// Returns 400 (Bad Request) with <see cref="ProblemDetails"/> when the request is invalid or contains improper formatting.
     /// Returns 499 (Client Closed Request) with <see cref="ProblemDetails"/> when the client cancels the request before completion.
     /// </returns>
-    [HttpPost("send")]
+    [HttpPost]
     [Consumes("application/json")]
     [Produces("application/json")]
     [SwaggerResponse(202, "The email was accepted for processing.")]

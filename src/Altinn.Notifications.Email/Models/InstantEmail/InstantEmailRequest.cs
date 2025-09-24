@@ -47,7 +47,7 @@ public record InstantEmailRequest
     public required EmailContentType ContentType { get; init; }
 
     /// <summary>
-    /// The unique identifier of the notification order, of which this email is a part.
+    /// The unique identifier for this specific email notification.
     /// </summary>
     [Required]
     [JsonPropertyName("notificationId")]

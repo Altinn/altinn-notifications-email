@@ -30,14 +30,14 @@ public class InstantEmailController : ControllerBase
     /// </summary>
     /// <param name="request">The request containing email content, content type, recipient, sender, subject, and notification ID.</param>
     /// <returns>
-    /// Returns 200 (OK) when the email was successfully accepted by the service provider.
+    /// Returns 202 (Accepted) when the email was successfully accepted for processing.
     /// Returns 400 (Bad Request) with <see cref="ProblemDetails"/> when the request is invalid or contains improper formatting.
     /// Returns 499 (Client Closed Request) with <see cref="ProblemDetails"/> when the client cancels the request before completion.
     /// </returns>
     [HttpPost("send")]
     [Consumes("application/json")]
     [Produces("application/json")]
-    [SwaggerResponse(200, "The email was accepted by the service provider.")]
+    [SwaggerResponse(202, "The email was accepted for processing.")]
     [SwaggerResponse(400, "The request was invalid.", typeof(ProblemDetails))]
     [SwaggerResponse(499, "The request was canceled before processing could complete.", typeof(ProblemDetails))]
     public async Task<IActionResult> Send([FromBody] InstantEmailRequest request)
@@ -48,7 +48,7 @@ public class InstantEmailController : ControllerBase
         {
             await _sendingService.SendAsync(emailDataModel);
 
-            return Ok();
+            return Accepted();
         }
         catch (InvalidOperationException)
         {

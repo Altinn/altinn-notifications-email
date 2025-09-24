@@ -150,7 +150,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
     }
 
     [Fact]
-    public async Task Send_WithValidPlainTextRequest_ReturnsOk()
+    public async Task Send_WithValidPlainTextRequest_ReturnsAccepted()
     {
         // Arrange
         var notificationId = Guid.NewGuid();
@@ -174,11 +174,12 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
 
         // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
     }
 
     [Fact]
-    public async Task Send_WithValidHtmlRequest_ReturnsOk()
+    public async Task Send_WithValidHtmlRequest_ReturnsAccepted()
     {
         // Arrange
         var notificationId = Guid.NewGuid();
@@ -202,11 +203,12 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         var response = await httpClient.PostAsJsonAsync("/notifications/email/api/v1/instantemail/send", instantEmailRequest);
 
         // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
     }
 
     [Fact]
-    public async Task Send_VerifiesCorrectMappingToEmailModel()
+    public async Task Send_WhenCalled_MapsRequestToDomainEmail()
     {
         // Arrange
         var notificationId = Guid.NewGuid();
@@ -240,6 +242,7 @@ public class InstantEmailControllerTests : IClassFixture<IntegrationTestWebAppli
         Assert.Equal("sender@test.altinn.no", capturedEmail.FromAddress);
         Assert.Equal("recipient@example.com", capturedEmail.ToAddress);
         Assert.Equal(EmailContentType.Html, capturedEmail.ContentType);
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
     }
 
     private HttpClient GetTestClient(ISendingService sendingService)

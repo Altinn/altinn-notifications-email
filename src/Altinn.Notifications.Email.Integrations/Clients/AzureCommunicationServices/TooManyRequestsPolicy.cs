@@ -37,7 +37,7 @@ public sealed class TooManyRequestsPolicy : HttpPipelineSynchronousPolicy
             ? $"HTTP 429 (Too Many Requests). Retry after {retrySeconds} seconds. {reason}"
             : $"HTTP 429 (Too Many Requests). {reason}";
 
-        var ex = new RequestFailedException(
+        var requestFailedException = new RequestFailedException(
             innerException: null,
             message: composedMessage,
             status: message.Response.Status,
@@ -45,10 +45,10 @@ public sealed class TooManyRequestsPolicy : HttpPipelineSynchronousPolicy
 
         if (retrySeconds.HasValue)
         {
-            ex.Data["RetryAfterSeconds"] = retrySeconds.Value;
+            requestFailedException.Data["RetryAfterSeconds"] = retrySeconds.Value;
         }
 
-        throw ex;
+        throw requestFailedException;
     }
 
     /// <summary>

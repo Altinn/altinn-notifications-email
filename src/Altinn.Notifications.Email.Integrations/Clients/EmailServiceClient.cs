@@ -32,7 +32,7 @@ public class EmailServiceClient : IEmailServiceClient
     public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings, ILogger<EmailServiceClient> logger)
     {
         var emailClientOptions = new EmailClientOptions();
-        emailClientOptions.AddPolicy(new Catch429Policy(), HttpPipelinePosition.PerRetry);
+        emailClientOptions.AddPolicy(new TooManyRequestsPolicy(), HttpPipelinePosition.PerRetry);
         _emailClient = new EmailClient(communicationServicesSettings.ConnectionString);
         _logger = logger;
     }

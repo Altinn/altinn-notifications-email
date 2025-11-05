@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 
 using Azure;
 using Azure.Core;
@@ -12,7 +13,7 @@ namespace Altinn.Notifications.Email.Integrations.Clients.AzureCommunicationServ
 /// classify the failure as a transient excessive call volume error.
 /// </summary>
 [ExcludeFromCodeCoverage]
-public sealed class Catch429Policy : HttpPipelineSynchronousPolicy
+public sealed class TooManyRequestsPolicy : HttpPipelineSynchronousPolicy
 {
     private const int _tooManyRequestsStatusCode = 429;
     private const string _retryAfterHeader = "Retry-After";
@@ -69,7 +70,7 @@ public sealed class Catch429Policy : HttpPipelineSynchronousPolicy
 
         // Case 2: HTTP-date
         // Retry-After date indicates when the request can be retried; compute delta in whole seconds (minimum 1).
-        if (DateTimeOffset.TryParse(value, out DateTimeOffset retryTime))
+        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var retryTime))
         {
             var delta = retryTime - DateTimeOffset.UtcNow;
             if (delta.TotalSeconds > 0)

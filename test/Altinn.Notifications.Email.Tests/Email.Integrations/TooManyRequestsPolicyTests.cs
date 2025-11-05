@@ -5,7 +5,6 @@ using Altinn.Notifications.Email.Integrations.Clients.AzureCommunicationServices
 using Azure;
 using Azure.Core;
 using Azure.Core.Pipeline;
-using Moq;
 using Xunit;
 
 namespace Altinn.Notifications.Email.Tests.Email.Integrations;
@@ -114,12 +113,11 @@ internal class TestResponse(int statusCode, string reasonPhrase, (string Key, st
 
     public override string ClientRequestId { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
 
-    // - No unmanaged resources to release in this test type, so make it a no-op.
     public override void Dispose()
     {
+        // No unmanaged resources to release in this test type, so make it a no-op.
     }
-    // You can optionally implement these to mirror the same behavior as Headers.
-    // Not required if the tests only use Response.Headers.
+
     protected override bool ContainsHeader(string name)
     {
         if (!_header.HasValue)

@@ -21,16 +21,19 @@ namespace Altinn.Notifications.Email.Integrations.Clients;
 public class EmailServiceClient : IEmailServiceClient
 {
     private readonly EmailClient _emailClient;
+    private readonly EmailServiceAdminSettings _emailServiceAdminSettings;
     private readonly ILogger<EmailServiceClient> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmailServiceClient"/> class.
     /// </summary>
     /// <param name="communicationServicesSettings">Settings for integration against Communication Services.</param>
+    /// <param name="emailServiceAdminSettings">Settings for email service administration and error handling.</param>
     /// <param name="logger">A logger</param>
-    public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings, ILogger<EmailServiceClient> logger)
+    public EmailServiceClient(CommunicationServicesSettings communicationServicesSettings, EmailServiceAdminSettings emailServiceAdminSettings, ILogger<EmailServiceClient> logger)
     {
         _emailClient = new EmailClient(communicationServicesSettings.ConnectionString);
+        _emailServiceAdminSettings = emailServiceAdminSettings;
         _logger = logger;
     }
 
@@ -139,6 +142,12 @@ public class EmailServiceClient : IEmailServiceClient
         {
             emailSendResult = Core.Status.EmailSendResult.Failed_InvalidEmailFormat;
         }
+        else if (e.Status >= 500 && e.Status < 600)
+        {
+            // Handle all 5xx errors from Azure Communication Services as transient errors
+            // These are server-side errors that should be retried (e.g., 502 Bad Gateway, 503 Service Unavailable)
+            emailSendResult = Core.Status.EmailSendResult.Failed_TransientError;
+        }
         else
         {
             emailSendResult = Core.Status.EmailSendResult.Failed;
@@ -148,11 +157,23 @@ public class EmailServiceClient : IEmailServiceClient
     }
 
     /// <summary>
+    /// Gets the configured delay in seconds for handling unknown/intermittent errors from Azure Communication Services.
+    /// This is used as a fallback when Azure Communication Services returns 5xx errors or other errors
+    /// where a retry-after value cannot be parsed from the error message.
+    /// </summary>
+    /// <returns>The configured delay in seconds for intermittent errors.</returns>
+    internal int GetUnknownErrorDelay()
+    {
+        return _emailServiceAdminSettings.IntermittentErrorDelay;
+    }
+
+    /// <summary>
     /// Gets the int proceeding the word seconds in the string.
+    /// Falls back to the configured intermittent error delay if no delay is found in the message.
     /// </summary>
     /// <param name="message">The messsage to find delay within</param>
     /// <returns></returns>
-    internal static int GetDelayFromString(string message)
+    internal int GetDelayFromString(string message)
     {
         var secondsString = Regex.Match(
                 message,
@@ -161,6 +182,6 @@ public class EmailServiceClient : IEmailServiceClient
                 TimeSpan.FromMilliseconds(10))
                 .Value;
 
-        return string.IsNullOrEmpty(secondsString) ? 60 : int.Parse(secondsString);
+        return string.IsNullOrEmpty(secondsString) ? GetUnknownErrorDelay() : int.Parse(secondsString);
     }
 }

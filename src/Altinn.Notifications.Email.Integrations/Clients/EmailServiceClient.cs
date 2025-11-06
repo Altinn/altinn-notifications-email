@@ -126,7 +126,12 @@ public class EmailServiceClient : IEmailServiceClient
         return Core.Status.EmailSendResult.Sending;
     }
 
-    private static Core.Status.EmailSendResult GetEmailSendResult(RequestFailedException e)
+    /// <summary>
+    /// Determines the appropriate email send result based on the request failed exception from Azure Communication Services.
+    /// </summary>
+    /// <param name="e">The request failed exception thrown by Azure Communication Services.</param>
+    /// <returns>The email send result indicating the type of failure.</returns>
+    internal static Core.Status.EmailSendResult GetEmailSendResult(RequestFailedException e)
     {
         Core.Status.EmailSendResult emailSendResult;
 

@@ -75,8 +75,8 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
 
         try
         {
-            // Try to deserialize as EventGridEvent array
-            var eventList = JsonSerializer.Deserialize<EventGridEvent[]>(body);
+            // Use EventGridEvent.ParseMany to properly deserialize with BinaryData support
+            var eventList = EventGridEvent.ParseMany(BinaryData.FromString(body));
             if (eventList == null)
             {
                 return operationIds;
@@ -85,13 +85,16 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             foreach (EventGridEvent eventGridEvent in eventList)
             {
                 // If the event is a system event, TryGetSystemEventData will return the deserialized system event
-                if (eventGridEvent.TryGetSystemEventData(out object systemEvent) && systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
+                if (eventGridEvent.TryGetSystemEventData(out object systemEvent))
                 {
-                    operationIds.Add(deliveryReport.MessageId);
+                    if (systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
+                    {
+                        operationIds.Add(deliveryReport.MessageId);
+                    }
                 }
             }
         }
-        catch (JsonException)
+        catch (Exception)
         {
             // Not a valid EventGrid event array, skip operation ID extraction
         }

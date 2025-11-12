@@ -95,6 +95,33 @@ public abstract class KafkaConsumerBase : BackgroundService
         await base.StopAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Safely commits the offset for a processed message.
+    /// </summary>
+    private void SafeCommit(ConsumeResult<string, string> result)
+    {
+        if (_stopping)
+        {
+            return;
+        }
+
+        try
+        {
+            _consumer.Commit(result);
+        }
+        catch (KafkaException ex)
+        {
+            if (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+            {
+                _logger.LogWarning("// {Class} // Commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+            }
+            else
+            {
+                _logger.LogError(ex, "// {Class} // Commit failed unexpectedly", GetType().Name);
+            }
+        }
+    }
+
     /// <inheritdoc/>
     public override void Dispose()
     {
@@ -145,8 +172,7 @@ public abstract class KafkaConsumerBase : BackgroundService
 
                             await processMessageFunc(message).ConfigureAwait(false);
 
-                            _consumer.Commit(consumeResult);
-                            _consumer.StoreOffset(consumeResult);
+                            SafeCommit(consumeResult);
                         }
                         catch (OperationCanceledException)
                         {
@@ -158,8 +184,7 @@ public abstract class KafkaConsumerBase : BackgroundService
                             {
                                 await retryMessageFunc(consumeResult.Message.Value).ConfigureAwait(false);
 
-                                _consumer.Commit(consumeResult);
-                                _consumer.StoreOffset(consumeResult);
+                                SafeCommit(consumeResult);
                             }
                             catch (Exception retryEx)
                             {

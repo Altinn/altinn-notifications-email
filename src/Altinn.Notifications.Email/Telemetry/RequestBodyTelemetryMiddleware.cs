@@ -49,9 +49,8 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             var activity = Activity.Current;
             if (activity != null && operationIds.Count > 0)
             {
-                // Add custom tags to the activity - these will appear in Application Insights customDimensions
+                // Add a custom tag to the activity - this will appear in Application Insights customDimensions
                 activity.SetTag("OperationIds", string.Join(", ", operationIds));
-                activity.SetTag("OperationCount", operationIds.Count);
             }
         }
 

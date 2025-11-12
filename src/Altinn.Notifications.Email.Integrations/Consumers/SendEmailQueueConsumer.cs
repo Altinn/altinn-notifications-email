@@ -12,10 +12,10 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 /// </summary>
 public sealed class SendEmailQueueConsumer : KafkaConsumerBase
 {
-    private readonly ISendingService _emailService;
-    private readonly ICommonProducer _producer;
-    private readonly ILogger<SendEmailQueueConsumer> _logger;
     private readonly string _retryTopicName;
+    private readonly ICommonProducer _producer;
+    private readonly ISendingService _emailService;
+    private readonly ILogger<SendEmailQueueConsumer> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SendEmailQueueConsumer"/> class.
@@ -27,10 +27,10 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
         ILogger<SendEmailQueueConsumer> logger)
         : base(kafkaSettings, logger, kafkaSettings.SendEmailQueueTopicName)
     {
-        _emailService = emailService;
-        _producer = producer;
-        _retryTopicName = kafkaSettings.SendEmailQueueRetryTopicName;
         _logger = logger;
+        _producer = producer;
+        _emailService = emailService;
+        _retryTopicName = kafkaSettings.SendEmailQueueRetryTopicName;
     }
 
     /// <inheritdoc/>
@@ -39,18 +39,21 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
         return Task.Run(() => ConsumeMessage(ConsumeEmail, RetryEmail, stoppingToken), stoppingToken);
     }
 
-    private async Task ConsumeEmail(string message)
+    private Task ConsumeEmail(string message)
     {
-        bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
-
-        if (!succeeded)
+        _ = Task.Run(async () =>
         {
-            _logger.LogError("// SendEmailQueueConsumer // ConsumeEmail // Deserialization of message failed. {Message}", message);
+            bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
 
-            return;
-        }
+            if (!succeeded)
+            {
+                _logger.LogError("// SendEmailQueueConsumer // ConsumeEmail // Deserialization of message failed. {Message}", message);
+            }
 
-        await _emailService.SendAsync(email);
+            await _emailService.SendAsync(email);
+        });
+
+        return Task.CompletedTask;
     }
 
     private async Task RetryEmail(string message)

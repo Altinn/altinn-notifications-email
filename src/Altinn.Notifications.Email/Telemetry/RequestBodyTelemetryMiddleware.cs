@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 using Azure.Messaging.EventGrid;
@@ -23,8 +24,8 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
     /// <returns>A task that represents the asynchronous operation.</returns>
     public async Task InvokeAsync(HttpContext context)
     {
-        // 1. Check if it's a POST/PUT request and if the content type is JSON/XML/Form
-        if (context.Request.Method == HttpMethods.Post || context.Request.Method == HttpMethods.Put)
+        // 1. Check if it's a POST request
+        if (context.Request.Method == HttpMethods.Post)
         {
             // Allow the body to be read multiple times (rewindable)
             context.Request.EnableBuffering();
@@ -41,21 +42,20 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             // Reset the stream's position to 0 so the next middleware/controller can read it
             context.Request.Body.Position = 0;
 
-            var requestTelemetry = context.Features.Get<RequestTelemetry>();
-            if (requestTelemetry != null)
+            // Extract operation IDs if the body contains EventGrid events
+            var operationIds = ExtractOperationIds(body);
+            
+            // Get the current Activity (OpenTelemetry equivalent of RequestTelemetry)
+            var activity = Activity.Current;
+            if (activity != null && operationIds.Count > 0)
             {
-                // Add the data to the customDimensions
-                // 3. Extract operation IDs if the body contains EventGrid events
-                var operationIds = ExtractOperationIds(body);
-                if (operationIds.Count > 0)
-                {
-                    requestTelemetry.Properties.Add("OperationIds", string.Join(", ", operationIds));
-                    requestTelemetry.Properties.Add("OperationCount", operationIds.Count.ToString());
-                }
+                // Add custom tags to the activity - these will appear in Application Insights customDimensions
+                activity.SetTag("OperationIds", string.Join(", ", operationIds));
+                activity.SetTag("OperationCount", operationIds.Count);
             }
         }
 
-        // 4. Continue to the next middleware in the pipeline
+        // Continue to the next middleware in the pipeline
         await _next(context);
     }
 

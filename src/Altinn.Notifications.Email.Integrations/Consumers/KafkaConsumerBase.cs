@@ -16,7 +16,7 @@ public abstract class KafkaConsumerBase : BackgroundService
 {
     private readonly string _topicName;
     private volatile bool _isShutdownInitiated;
-    private const int _maxMessagesCountInBatch = 100;
+    private const int _maxMessagesCountInBatch = 1000;
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
     private const int _messagesBatchPollTimeoutInMs = 100;

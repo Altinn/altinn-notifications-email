@@ -39,21 +39,16 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
         return Task.Run(() => ConsumeMessage(ConsumeEmail, RetryEmail, stoppingToken), stoppingToken);
     }
 
-    private Task ConsumeEmail(string message)
+    private async Task ConsumeEmail(string message)
     {
-        _ = Task.Run(async () =>
+        bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
+
+        if (!succeeded)
         {
-            bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
+            _logger.LogError("// SendEmailQueueConsumer // ConsumeEmail // Deserialization of message failed. {Message}", message);
+        }
 
-            if (!succeeded)
-            {
-                _logger.LogError("// SendEmailQueueConsumer // ConsumeEmail // Deserialization of message failed. {Message}", message);
-            }
-
-            await _emailService.SendAsync(email);
-        });
-
-        return Task.CompletedTask;
+        await _emailService.SendAsync(email);
     }
 
     private async Task RetryEmail(string message)

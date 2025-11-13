@@ -11,18 +11,19 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers;
 
 /// <summary>
 /// Abstract base class for Kafka consumers, providing a framework for consuming messages from a specified topic.
-/// Supports per-partition serialized processing with cross-partition concurrency, graceful shutdown, and error handling.
+/// Supports batch processing with bulk commits, cross-partition concurrency, graceful shutdown, and error handling.
 /// </summary>
 public abstract class KafkaConsumerBase : BackgroundService
 {
     private volatile bool _stopping;
     private readonly string _topicName;
-    private const int _defaultMaxParallelism = 6;
+    private const int _pollTimeoutMs = 100;
+    private const int _defaultBatchSize = 50;
+    private const int _defaultMaxParallelism = 75;
     private readonly SemaphoreSlim _globalConcurrency;
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
     private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
-    private readonly ConcurrentDictionary<TopicPartition, SemaphoreSlim> _partitionLocks = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
@@ -60,6 +61,75 @@ public abstract class KafkaConsumerBase : BackgroundService
         _globalConcurrency = new SemaphoreSlim(_defaultMaxParallelism, _defaultMaxParallelism);
     }
 
+    /// <summary>
+    /// Polls for a batch of messages from Kafka with the specified batch size and timeout.
+    /// </summary>
+    /// <param name="maxBatchSize">Maximum number of messages to poll in a single batch.</param>
+    /// <param name="timeoutMs">Timeout in milliseconds for polling operation.</param>
+    /// <returns>Array of consumed message results.</returns>
+    private ConsumeResult<string, string>[] PollBatch(int maxBatchSize, int timeoutMs)
+    {
+        var batch = new List<ConsumeResult<string, string>>();
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var startTime = DateTime.UtcNow;
+
+        while (batch.Count < maxBatchSize && (DateTime.UtcNow - startTime) < timeout)
+        {
+            try
+            {
+                var remainingTimeout = timeout - (DateTime.UtcNow - startTime);
+                if (remainingTimeout <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                var result = _consumer.Consume(remainingTimeout);
+                if (result != null)
+                {
+                    batch.Add(result);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            catch (ConsumeException ex)
+            {
+                _logger.LogWarning(ex, "// {Class} // Consume exception during batch polling", GetType().Name);
+                break;
+            }
+        }
+
+        return [.. batch];
+    }
+
+    /// <summary>
+    /// Safely commits the offsets for a batch of processed messages.
+    /// </summary>
+    private void SafeBulkCommit(IEnumerable<TopicPartitionOffset> offsets)
+    {
+        if (_stopping || !offsets.Any())
+        {
+            return;
+        }
+
+        try
+        {
+            _consumer.Commit(offsets);
+        }
+        catch (KafkaException ex)
+        {
+            if (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+            {
+                _logger.LogWarning("// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+            }
+            else
+            {
+                _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
+            }
+        }
+    }
+
     /// <inheritdoc/>
     protected override abstract Task ExecuteAsync(CancellationToken stoppingToken);
 
@@ -95,33 +165,6 @@ public abstract class KafkaConsumerBase : BackgroundService
         await base.StopAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// Safely commits the offset for a processed message.
-    /// </summary>
-    private void SafeCommit(ConsumeResult<string, string> result)
-    {
-        if (_stopping)
-        {
-            return;
-        }
-
-        try
-        {
-            _consumer.Commit(result);
-        }
-        catch (KafkaException ex)
-        {
-            if (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
-            {
-                _logger.LogWarning("// {Class} // Commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
-            }
-            else
-            {
-                _logger.LogError(ex, "// {Class} // Commit failed unexpectedly", GetType().Name);
-            }
-        }
-    }
-
     /// <inheritdoc/>
     public override void Dispose()
     {
@@ -131,10 +174,10 @@ public abstract class KafkaConsumerBase : BackgroundService
     }
 
     /// <summary>
-    /// Consumes messages from the Kafka topic in a continuous loop, ensuring per-partition serialized processing
-    /// while allowing cross-partition concurrency. Messages are polled, processed via the provided delegate,
-    /// and committed on success. On processing failure, the retry delegate is invoked. The loop respects
-    /// global concurrency limits and handles graceful shutdown via the cancellation token.
+    /// Consumes messages from the Kafka topic in batches, ensuring efficient processing
+    /// with bulk commits. Messages are polled in batches, processed in parallel, and committed
+    /// together for optimal performance. The method handles graceful shutdown and respects
+    /// global concurrency limits.
     /// </summary>
     /// <param name="processMessageFunc">A function that takes the message string and processes it asynchronously.</param>
     /// <param name="retryMessageFunc">A function that takes the message string and handles retry logic asynchronously on processing failure.</param>
@@ -146,75 +189,109 @@ public abstract class KafkaConsumerBase : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested && !_stopping)
         {
-            ConsumeResult<string, string>? consumeResult = null;
-
             try
             {
-                consumeResult = _consumer.Consume(stoppingToken);
-                if (consumeResult == null)
+                // Poll for a batch of messages
+                var batch = PollBatch(_defaultBatchSize, _pollTimeoutMs);
+
+                if (batch.Length == 0)
                 {
+                    await Task.Delay(50, stoppingToken); // Brief pause when no messages
                     continue;
                 }
 
-                var topicPartition = consumeResult.TopicPartition;
-                var partitionSemaphore = _partitionLocks.GetOrAdd(topicPartition, _ => new SemaphoreSlim(1, 1));
+                var batchStartTime = DateTime.UtcNow;
+                var successfulOffsets = new List<TopicPartitionOffset>();
+                var semaphoreTasks = new List<Task>();
 
-                await _globalConcurrency.WaitAsync(stoppingToken).ConfigureAwait(false);
+                // Process batch messages with controlled concurrency
+                foreach (var consumeResult in batch)
+                {
+                    await _globalConcurrency.WaitAsync(stoppingToken).ConfigureAwait(false);
 
-                var processingTaskIdentifier = Guid.NewGuid();
-                var processingTask = Task.Run(
-                    async () =>
-                    {
-                        await partitionSemaphore.WaitAsync(stoppingToken).ConfigureAwait(false);
-                        try
-                        {
-                            string message = consumeResult.Message.Value;
-
-                            await processMessageFunc(message).ConfigureAwait(false);
-
-                            SafeCommit(consumeResult);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            // shutdown scenario
-                        }
-                        catch (Exception ex)
+                    var processingTaskId = Guid.NewGuid();
+                    var processingTask = Task.Run(
+                        async () =>
                         {
                             try
                             {
-                                await retryMessageFunc(consumeResult.Message.Value).ConfigureAwait(false);
+                                await processMessageFunc(consumeResult.Message.Value).ConfigureAwait(false);
 
-                                SafeCommit(consumeResult);
+                                // Track successful processing for commit
+                                lock (successfulOffsets)
+                                {
+                                    successfulOffsets.Add(new TopicPartitionOffset(
+                                        consumeResult.TopicPartition,
+                                        consumeResult.Offset + 1)); // Commit next offset
+                                }
                             }
-                            catch (Exception retryEx)
+                            catch (OperationCanceledException)
                             {
-                                _logger.LogError(retryEx, "// {Class} // Retry failed for message", GetType().Name);
+                                // Shutdown scenario - don't retry
                             }
+                            catch (Exception ex)
+                            {
+                                try
+                                {
+                                    await retryMessageFunc(consumeResult.Message.Value).ConfigureAwait(false);
 
-                            _logger.LogError(ex, "// {Class} // ConsumeMessage // Error while processing message", GetType().Name);
-                        }
-                        finally
-                        {
-                            partitionSemaphore.Release();
-                            _globalConcurrency.Release();
-                            _inFlightTasks.TryRemove(processingTaskIdentifier, out _);
-                        }
-                    },
-                    stoppingToken);
+                                    // If retry succeeds, still mark for commit
+                                    lock (successfulOffsets)
+                                    {
+                                        successfulOffsets.Add(new TopicPartitionOffset(
+                                            consumeResult.TopicPartition,
+                                            consumeResult.Offset + 1));
+                                    }
+                                }
+                                catch (Exception retryEx)
+                                {
+                                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}", GetType().Name, consumeResult.Offset);
+                                }
 
-                _inFlightTasks[processingTaskIdentifier] = processingTask;
-            }
-            catch (ConsumeException ce) when (!stoppingToken.IsCancellationRequested)
-            {
-                _logger.LogError(ce, "// {Class} // Kafka consume exception", GetType().Name);
+                                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}", GetType().Name, consumeResult.Offset);
+                            }
+                            finally
+                            {
+                                _globalConcurrency.Release();
+                                _inFlightTasks.TryRemove(processingTaskId, out _);
+                            }
+                        },
+                        stoppingToken);
+
+                    _inFlightTasks[processingTaskId] = processingTask;
+                    semaphoreTasks.Add(processingTask);
+                }
+
+                // Wait for all messages in the batch to complete processing
+                await Task.WhenAll(semaphoreTasks);
+
+                // Bulk commit all successful offsets
+                if (successfulOffsets.Count > 0)
+                {
+                    SafeBulkCommit(successfulOffsets);
+
+                    var batchDuration = (DateTime.UtcNow - batchStartTime).TotalMilliseconds;
+                    _logger.LogDebug(
+                        "// {Class} // Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
+                        GetType().Name,
+                        batch.Length,
+                        batchDuration,
+                        successfulOffsets.Count);
+                }
+                else
+                {
+                    _logger.LogWarning("// {Class} // No messages successfully processed in batch of {BatchSize}", GetType().Name, batch.Length);
+                }
             }
             catch (OperationCanceledException)
             {
-                // Expected on cancellation
+                // Expected during shutdown
+                break;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "// {Class} // Unexpected loop error", GetType().Name);
+                _logger.LogError(ex, "// {Class} // Unexpected error in batch processing loop", GetType().Name);
+                await Task.Delay(1000, stoppingToken); // Brief delay before retrying
             }
         }
     }

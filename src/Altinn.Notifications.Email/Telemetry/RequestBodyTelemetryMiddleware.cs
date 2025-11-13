@@ -2,15 +2,17 @@
 using System.Text;
 using System.Text.Json;
 
+using Altinn.Notifications.Email.Core.Status;
+using Altinn.Notifications.Email.Mappers;
+
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.EventGrid.SystemEvents;
-
-using Microsoft.ApplicationInsights.DataContracts;
 
 namespace Altinn.Notifications.Email.Telemetry;
 
 /// <summary>
-/// Middleware that captures HTTP request bodies for POST and PUT requests and adds them to Application Insights telemetry.
+/// Middleware that extracts send operation results from EventGrid email delivery report events
+/// in POST request bodies and adds them as tags to OpenTelemetry Activity for Application Insights tracking.
 /// </summary>
 /// <param name="next">The next middleware delegate in the request pipeline.</param>
 public class RequestBodyTelemetryMiddleware(RequestDelegate next)
@@ -18,13 +20,15 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
     private readonly RequestDelegate _next = next;
 
     /// <summary>
-    /// Invokes the middleware to capture and log request body content.
+    /// Invokes the middleware to extract send operation results from EventGrid email delivery report events.
+    /// The extracted data is added as tags to the current OpenTelemetry Activity, which will appear in 
+    /// Application Insights customDimensions.
     /// </summary>
     /// <param name="context">The HTTP context for the current request.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
     public async Task InvokeAsync(HttpContext context)
     {
-        // 1. Check if it's a POST request
+        // Check if it's a POST request
         if (context.Request.Method == HttpMethods.Post)
         {
             // Allow the body to be read multiple times (rewindable)
@@ -42,15 +46,15 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             // Reset the stream's position to 0 so the next middleware/controller can read it
             context.Request.Body.Position = 0;
 
-            // Extract operation IDs if the body contains EventGrid events
-            var operationIds = ExtractOperationIds(body);
+            // Extract send operation results if the body contains EventGrid email delivery report events
+            var sendOperationResults = ExtractSendOperationResults(body);
             
-            // Get the current Activity (OpenTelemetry equivalent of RequestTelemetry)
+            // Get the current Activity (OpenTelemetry tracing context)
             var activity = Activity.Current;
-            if (activity != null && operationIds.Count > 0)
+            if (activity != null && sendOperationResults.Count > 0)
             {
-                // Add a custom tag to the activity - this will appear in Application Insights customDimensions
-                activity.SetTag("OperationIds", string.Join(", ", operationIds));
+                // Add send operation results as a custom tag - will appear in Application Insights customDimensions
+                activity.SetTag("SendOperationResults", JsonSerializer.Serialize(sendOperationResults));
             }
         }
 
@@ -59,17 +63,18 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
     }
 
     /// <summary>
-    /// Extracts operation IDs from EventGrid events containing AcsEmailDeliveryReportReceivedEventData.
+    /// Extracts send operation results from EventGrid events containing AcsEmailDeliveryReportReceivedEventData.
+    /// Each result contains the operation ID (message ID) and the parsed email send result (delivery status).
     /// </summary>
-    /// <param name="body">The request body as a string.</param>
-    /// <returns>A list of operation IDs (message IDs) from delivery reports.</returns>
-    private static List<string> ExtractOperationIds(string body)
+    /// <param name="body">The request body as a string containing EventGrid events in JSON format.</param>
+    /// <returns>A list of <see cref="SendOperationResult"/> objects extracted from email delivery report events.</returns>
+    private static List<SendOperationResult> ExtractSendOperationResults(string body)
     {
-        var operationIds = new List<string>();
+        var sendOperationResults = new List<SendOperationResult>();
 
         if (string.IsNullOrWhiteSpace(body))
         {
-            return operationIds;
+            return sendOperationResults;
         }
 
         try
@@ -78,7 +83,7 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             var eventList = EventGridEvent.ParseMany(BinaryData.FromString(body));
             if (eventList == null)
             {
-                return operationIds;
+                return sendOperationResults;
             }
 
             foreach (EventGridEvent eventGridEvent in eventList)
@@ -88,16 +93,20 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
                 {
                     if (systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
                     {
-                        operationIds.Add(deliveryReport.MessageId);
+                        sendOperationResults.Add(new SendOperationResult 
+                        { 
+                            OperationId = deliveryReport.MessageId, 
+                            SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString()) 
+                        });
                     }
                 }
             }
         }
         catch (Exception)
         {
-            // Not a valid EventGrid event array, skip operation ID extraction
+            // Not a valid EventGrid event array or parsing failed, return empty list
         }
 
-        return operationIds;
+        return sendOperationResults;
     }
 }

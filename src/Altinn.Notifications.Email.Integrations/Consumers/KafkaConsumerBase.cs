@@ -11,27 +11,26 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers;
 
 /// <summary>
 /// Abstract base class for Kafka consumers, providing a framework for consuming messages from a specified topic.
-/// Supports batch processing with bulk commits, cross-partition concurrency, graceful shutdown, and error handling.
 /// </summary>
 public abstract class KafkaConsumerBase : BackgroundService
 {
-    private volatile bool _stopping;
     private readonly string _topicName;
-    private const int _pollTimeoutMs = 100;
-    private const int _defaultBatchSize = 50;
-    private const int _defaultMaxParallelism = 75;
-    private readonly SemaphoreSlim _globalConcurrency;
+    private volatile bool _isShutdownInitiated;
+    private const int _maxMessagesCountInBatch = 100;
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
+    private const int _messagesBatchPollTimeoutInMs = 100;
+    private const int _maxConcurrentProcessingTasks = 100;
+    private readonly SemaphoreSlim _processingConcurrencySemaphore;
     private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
     /// </summary>
     protected KafkaConsumerBase(
+        string topicName,
         KafkaSettings settings,
-        ILogger<KafkaConsumerBase> logger,
-        string topicName)
+        ILogger<KafkaConsumerBase> logger)
     {
         _logger = logger;
         _topicName = topicName;
@@ -40,8 +39,18 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         var consumerConfig = new ConsumerConfig(config.ConsumerConfig)
         {
+            FetchWaitMaxMs = 100,
             EnableAutoCommit = false,
+            SessionTimeoutMs = 30000,
+            QueuedMinMessages = 10000,
+            FetchMinBytes = 512 * 1024,
+            MaxPollIntervalMs = 300000,
+            HeartbeatIntervalMs = 5000,
+            SocketKeepaliveEnable = true,
             EnableAutoOffsetStore = false,
+            QueuedMaxMessagesKbytes = 131072,
+            MaxPartitionFetchBytes = 2 * 1024 * 1024,
+            SocketReceiveBufferBytes = 2 * 1024 * 1024,
             AutoOffsetReset = AutoOffsetReset.Earliest,
             GroupId = $"{settings.Consumer.GroupId}-{GetType().Name.ToLower()}"
         };
@@ -58,7 +67,7 @@ public abstract class KafkaConsumerBase : BackgroundService
             })
             .Build();
 
-        _globalConcurrency = new SemaphoreSlim(_defaultMaxParallelism, _defaultMaxParallelism);
+        _processingConcurrencySemaphore = new SemaphoreSlim(_maxConcurrentProcessingTasks, _maxConcurrentProcessingTasks);
     }
 
     /// <summary>
@@ -108,7 +117,7 @@ public abstract class KafkaConsumerBase : BackgroundService
     /// </summary>
     private void SafeBulkCommit(IEnumerable<TopicPartitionOffset> offsets)
     {
-        if (_stopping || !offsets.Any())
+        if (_isShutdownInitiated || !offsets.Any())
         {
             return;
         }
@@ -143,7 +152,7 @@ public abstract class KafkaConsumerBase : BackgroundService
     /// <inheritdoc/>
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        _stopping = true;
+        _isShutdownInitiated = true;
 
         _consumer.Unsubscribe();
 
@@ -187,12 +196,12 @@ public abstract class KafkaConsumerBase : BackgroundService
         Func<string, Task> retryMessageFunc,
         CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested && !_stopping)
+        while (!stoppingToken.IsCancellationRequested && !_isShutdownInitiated)
         {
             try
             {
                 // Poll for a batch of messages
-                var batch = PollBatch(_defaultBatchSize, _pollTimeoutMs);
+                var batch = PollBatch(_maxMessagesCountInBatch, _messagesBatchPollTimeoutInMs);
 
                 if (batch.Length == 0)
                 {
@@ -207,7 +216,7 @@ public abstract class KafkaConsumerBase : BackgroundService
                 // Process batch messages with controlled concurrency
                 foreach (var consumeResult in batch)
                 {
-                    await _globalConcurrency.WaitAsync(stoppingToken).ConfigureAwait(false);
+                    await _processingConcurrencySemaphore.WaitAsync(stoppingToken).ConfigureAwait(false);
 
                     var processingTaskId = Guid.NewGuid();
                     var processingTask = Task.Run(
@@ -252,7 +261,7 @@ public abstract class KafkaConsumerBase : BackgroundService
                             }
                             finally
                             {
-                                _globalConcurrency.Release();
+                                _processingConcurrencySemaphore.Release();
                                 _inFlightTasks.TryRemove(processingTaskId, out _);
                             }
                         },
@@ -271,7 +280,7 @@ public abstract class KafkaConsumerBase : BackgroundService
                     SafeBulkCommit(successfulOffsets);
 
                     var batchDuration = (DateTime.UtcNow - batchStartTime).TotalMilliseconds;
-                    _logger.LogDebug(
+                    _logger.LogInformation(
                         "// {Class} // Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
                         GetType().Name,
                         batch.Length,

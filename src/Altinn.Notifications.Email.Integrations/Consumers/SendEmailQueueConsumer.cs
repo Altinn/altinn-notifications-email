@@ -25,7 +25,7 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
         ISendingService emailService,
         ICommonProducer producer,
         ILogger<SendEmailQueueConsumer> logger)
-        : base(kafkaSettings, logger, kafkaSettings.SendEmailQueueTopicName)
+        : base(kafkaSettings.SendEmailQueueTopicName, kafkaSettings, logger)
     {
         _logger = logger;
         _producer = producer;

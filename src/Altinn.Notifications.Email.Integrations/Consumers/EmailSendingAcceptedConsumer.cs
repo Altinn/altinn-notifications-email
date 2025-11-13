@@ -30,7 +30,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
         KafkaSettings kafkaSettings,
         IDateTimeService dateTime,
         ILogger<EmailSendingAcceptedConsumer> logger)
-        : base(kafkaSettings, logger, kafkaSettings.EmailSendingAcceptedTopicName)
+        : base(kafkaSettings.EmailSendingAcceptedTopicName, kafkaSettings, logger)
     {
         _statusService = statusService;
         _producer = producer;

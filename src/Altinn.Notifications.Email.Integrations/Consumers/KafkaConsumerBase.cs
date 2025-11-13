@@ -274,23 +274,23 @@ public abstract class KafkaConsumerBase : BackgroundService
                 // Wait for all messages in the batch to complete processing
                 await Task.WhenAll(semaphoreTasks);
 
-                // Bulk commit all successful offsets
                 if (successfulOffsets.Count > 0)
                 {
                     SafeBulkCommit(successfulOffsets);
-
-                    var batchDuration = (DateTime.UtcNow - batchStartTime).TotalMilliseconds;
-                    _logger.LogInformation(
-                        "// {Class} // Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
-                        GetType().Name,
-                        batch.Length,
-                        batchDuration,
-                        successfulOffsets.Count);
                 }
                 else
                 {
                     _logger.LogWarning("// {Class} // No messages successfully processed in batch of {BatchSize}", GetType().Name, batch.Length);
                 }
+
+                var batchDuration = (DateTime.UtcNow - batchStartTime).TotalMilliseconds;
+
+                _logger.LogInformation(
+                    "// KafkaConsumerBase // ConsumeMessage // Batch consuming completed for topic {Topic}. Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
+                    _topicName,
+                    batch.Length,
+                    batchDuration,
+                    successfulOffsets.Count);
             }
             catch (OperationCanceledException)
             {
@@ -300,7 +300,6 @@ public abstract class KafkaConsumerBase : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "// {Class} // Unexpected error in batch processing loop", GetType().Name);
-                await Task.Delay(1000, stoppingToken); // Brief delay before retrying
             }
         }
     }

@@ -52,7 +52,7 @@ public abstract class KafkaConsumerBase : BackgroundService
             MaxPartitionFetchBytes = 2 * 1024 * 1024,
             SocketReceiveBufferBytes = 2 * 1024 * 1024,
             AutoOffsetReset = AutoOffsetReset.Earliest,
-            GroupId = $"{settings.Consumer.GroupId}-{topicName.Replace('.', '-')}"
+            GroupId = $"{settings.Consumer.GroupId}-{GetType().Name.ToLower()}"
         };
 
         _consumer = new ConsumerBuilder<string, string>(consumerConfig)

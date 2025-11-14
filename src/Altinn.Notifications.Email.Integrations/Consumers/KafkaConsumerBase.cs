@@ -49,10 +49,10 @@ public abstract class KafkaConsumerBase : BackgroundService
             SocketKeepaliveEnable = true,
             EnableAutoOffsetStore = false,
             QueuedMaxMessagesKbytes = 131072,
+            AutoOffsetReset = AutoOffsetReset.Latest,
             MaxPartitionFetchBytes = 2 * 1024 * 1024,
             SocketReceiveBufferBytes = 2 * 1024 * 1024,
-            AutoOffsetReset = AutoOffsetReset.Earliest,
-            GroupId = $"{settings.Consumer.GroupId}-{GetType().Name.ToLower()}"
+            GroupId = $"{settings.Consumer.GroupId}-{topicName.Replace(".", "-")}"
         };
 
         _consumer = new ConsumerBuilder<string, string>(consumerConfig)

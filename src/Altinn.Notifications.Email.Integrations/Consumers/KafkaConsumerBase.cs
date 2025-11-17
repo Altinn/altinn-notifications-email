@@ -243,8 +243,8 @@ public abstract class KafkaConsumerBase : BackgroundService
             .GroupBy(o => o.TopicPartition)
             .Select(g =>
             {
-                var maxOffset = g.Max(o => o.Offset);
-                return new TopicPartitionOffset(g.Key, maxOffset);
+                var max = g.Select(x => x.Offset.Value).Max();
+                return new TopicPartitionOffset(g.Key, new Offset(max));
             })
             .ToList();
 

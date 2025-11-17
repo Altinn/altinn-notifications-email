@@ -96,6 +96,8 @@ public abstract class KafkaConsumerBase : BackgroundService
     {
         _consumer.Subscribe(_topicName);
 
+        _logger.LogInformation("// {Class} // Subscribed to topic {Topic}", GetType().Name, _topicName);
+
         return base.StartAsync(cancellationToken);
     }
 
@@ -108,10 +110,10 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         var processingTasks = _inFlightTasks.Values.ToArray();
 
+        _logger.LogInformation("// {Class} // Shutdown initiated. In-flight tasks: {Count}", GetType().Name, processingTasks.Length);
+
         if (processingTasks.Length > 0)
         {
-            _logger.LogInformation("// {Class} // Awaiting {Count} in-flight tasks", GetType().Name, processingTasks.Length);
-
             try
             {
                 await Task.WhenAll(processingTasks);
@@ -129,14 +131,11 @@ public abstract class KafkaConsumerBase : BackgroundService
     protected override abstract Task ExecuteAsync(CancellationToken stoppingToken);
 
     /// <summary>
-    /// Consumes messages from the Kafka topic in batches, ensuring efficient processing
-    /// with bulk commits. Messages are polled in batches, processed in parallel, and committed
-    /// together for optimal performance. The method handles graceful shutdown and respects
-    /// global concurrency limits.
+    /// Consumes messages from the Kafka topic in batches, ensuring efficient processing with bulk commits.
     /// </summary>
-    /// <param name="processMessageFunc">A function that takes the message string and processes it asynchronously.</param>
-    /// <param name="retryMessageFunc">A function that takes the message string and handles retry logic asynchronously on processing failure.</param>
-    /// <param name="cancellationToken">A cancellation token to signal when to stop consuming messages.</param>
+    /// <param name="processMessageFunc">Function to process a single message.</param>
+    /// <param name="retryMessageFunc">Function to retry a message if processing fails.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     protected async Task ConsumeMessage(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
@@ -144,11 +143,20 @@ public abstract class KafkaConsumerBase : BackgroundService
             try
             {
                 var messageBatch = FetchMessageBatch(_maxMessagesCountInBatch, _messagesBatchPollTimeoutInMs, cancellationToken);
+
                 if (messageBatch.Length == 0)
                 {
                     await Task.Delay(50, cancellationToken);
                     continue;
                 }
+
+                _logger.LogInformation(
+                    "// {Class} // Polled {BatchSize} messages. Offsets {StartOffset}..{EndOffset}. In-flight tasks: {InFlight}",
+                    GetType().Name,
+                    messageBatch.Length,
+                    messageBatch[0].Offset,
+                    messageBatch[^1].Offset,
+                    _inFlightTasks.Count);
 
                 var processingTasks = new List<Task>();
                 var processingStartTime = DateTime.UtcNow;
@@ -159,14 +167,17 @@ public abstract class KafkaConsumerBase : BackgroundService
                     await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
                     var processingTaskId = Guid.NewGuid();
+
+                    _logger.LogInformation("// {Class} // Start processing message at offset {Offset}", GetType().Name, message.Offset);
+
                     var processingTask = Task.Run(
                         async () =>
                         {
                             try
                             {
                                 await processMessageFunc(message.Message.Value);
-
                                 successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
+                                _logger.LogInformation("// {Class} // Successfully processed message at offset {Offset}", GetType().Name, message.Offset);
                             }
                             catch (OperationCanceledException)
                             {
@@ -174,28 +185,34 @@ public abstract class KafkaConsumerBase : BackgroundService
                             }
                             catch (Exception ex)
                             {
+                                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, message.Offset);
+
                                 try
                                 {
                                     await retryMessageFunc(message.Message.Value);
+
                                     successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
+
+                                    _logger.LogInformation("// {Class} // Retry succeeded for message at offset {Offset}", GetType().Name, message.Offset);
                                 }
                                 catch (Exception retryEx)
                                 {
                                     _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}", GetType().Name, message.Offset);
                                 }
-
-                                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}", GetType().Name, message.Offset);
                             }
                             finally
                             {
                                 _processingConcurrencySemaphore.Release();
 
                                 _inFlightTasks.TryRemove(processingTaskId, out _);
+
+                                _logger.LogInformation("// {Class} // Released semaphore for message at offset {Offset}. In-flight tasks: {InFlight}", GetType().Name, message.Offset, _inFlightTasks.Count);
                             }
                         },
                         cancellationToken);
 
                     _inFlightTasks[processingTaskId] = processingTask;
+
                     processingTasks.Add(processingTask);
                 }
 
@@ -203,6 +220,8 @@ public abstract class KafkaConsumerBase : BackgroundService
 
                 if (!successfulOffsets.IsEmpty)
                 {
+                    _logger.LogInformation("// {Class} // Committing {Count} offsets to Kafka", GetType().Name, successfulOffsets.Count);
+
                     SafeCommit(successfulOffsets);
                 }
                 else
@@ -253,9 +272,13 @@ public abstract class KafkaConsumerBase : BackgroundService
             return;
         }
 
+        _logger.LogInformation("// {Class} // Committing normalized offsets per partition: {Offsets}", GetType().Name, string.Join(',', normalized.Select(o => $"{o.Topic}:{o.Partition}-{o.Offset}")));
+
         try
         {
             _consumer.Commit(normalized);
+
+            _logger.LogInformation("// {Class} // Successfully committed {Count} offsets", GetType().Name, normalized.Count);
         }
         catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
         {
@@ -272,10 +295,8 @@ public abstract class KafkaConsumerBase : BackgroundService
     /// </summary>
     /// <param name="maxBatchSize">The maximum number of messages to return.</param>
     /// <param name="timeoutMs">The total maximum time (in milliseconds) spent polling for this batch.</param>
-    /// <param name="cancellationToken">Token observed for cooperative cancellation.
-    /// <returns>
-    /// An array (possibly empty) of consecutively polled <see cref="ConsumeResult{TKey,TValue}"/> instances.
-    /// </returns>
+    /// <param name="cancellationToken">Token observed for cooperative cancellation.</param>
+    /// <returns>An array (possibly empty) of consecutively polled <see cref="ConsumeResult{TKey,TValue}"/> instances.</returns>
     private ConsumeResult<string, string>[] FetchMessageBatch(int maxBatchSize, int timeoutMs, CancellationToken cancellationToken)
     {
         if (maxBatchSize <= 0 || timeoutMs <= 0 || cancellationToken.IsCancellationRequested)
@@ -307,10 +328,11 @@ public abstract class KafkaConsumerBase : BackgroundService
             catch (ConsumeException ex)
             {
                 _logger.LogWarning(ex, "// {Class} // Consume exception during batch polling", GetType().Name);
-
                 break;
             }
         }
+
+        _logger.LogInformation("// {Class} // Fetched {Count} messages from Kafka in batch", GetType().Name, polledMessages.Count);
 
         return [.. polledMessages];
     }

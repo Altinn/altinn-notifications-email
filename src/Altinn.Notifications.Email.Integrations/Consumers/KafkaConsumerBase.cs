@@ -16,21 +16,20 @@ public abstract class KafkaConsumerBase : BackgroundService
 {
     private readonly string _topicName;
     private volatile bool _isShutdownInitiated;
-    private const int _maxMessagesCountInBatch = 1000;
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
+
+    private const int _maxMessagesCountInBatch = 200;
     private const int _messagesBatchPollTimeoutInMs = 100;
     private const int _maxConcurrentProcessingTasks = 100;
+
     private readonly SemaphoreSlim _processingConcurrencySemaphore;
     private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
     /// </summary>
-    protected KafkaConsumerBase(
-        string topicName,
-        KafkaSettings settings,
-        ILogger<KafkaConsumerBase> logger)
+    protected KafkaConsumerBase(string topicName, KafkaSettings settings, ILogger<KafkaConsumerBase> logger)
     {
         _logger = logger;
         _topicName = topicName;
@@ -39,24 +38,37 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         var consumerConfig = new ConsumerConfig(config.ConsumerConfig)
         {
-            FetchWaitMaxMs = 100,
-            EnableAutoCommit = false,
+            FetchWaitMaxMs = 20,
+            QueuedMinMessages = 1000,
             SessionTimeoutMs = 30000,
-            QueuedMinMessages = 10000,
-            FetchMinBytes = 512 * 1024,
-            MaxPollIntervalMs = 300000,
+            EnableAutoCommit = false,
+            FetchMinBytes = 64 * 1024,
             HeartbeatIntervalMs = 5000,
-            SocketKeepaliveEnable = true,
+            MaxPollIntervalMs = 300000,
             EnableAutoOffsetStore = false,
-            QueuedMaxMessagesKbytes = 131072,
-            MaxPartitionFetchBytes = 2 * 1024 * 1024,
+            QueuedMaxMessagesKbytes = 32768,
+            MaxPartitionFetchBytes = 4 * 1024 * 1024,
             SocketReceiveBufferBytes = 2 * 1024 * 1024,
             AutoOffsetReset = AutoOffsetReset.Earliest,
             GroupId = $"{settings.Consumer.GroupId}-{GetType().Name.ToLower()}"
         };
 
         _consumer = new ConsumerBuilder<string, string>(consumerConfig)
-            .SetErrorHandler((_, e) => _logger.LogError("// {Class} // Error: {Reason}", GetType().Name, e.Reason))
+            .SetErrorHandler((_, e) =>
+            {
+                if (e.IsFatal)
+                {
+                    _logger.LogCritical("FATAL Kafka error. Code={ErrorCode}. Reason={Reason}", e.Code, e.Reason);
+                }
+                else if (e.IsError)
+                {
+                    _logger.LogError("Kafka error. Code={ErrorCode}. Reason={Reason}", e.Code, e.Reason);
+                }
+                else
+                {
+                    _logger.LogWarning("Kafka warning. Code={ErrorCode}. Reason={Reason}", e.Code, e.Reason);
+                }
+            })
             .SetPartitionsAssignedHandler((_, partitions) =>
             {
                 _logger.LogInformation("// {Class} // Partitions assigned: {Partitions}", GetType().Name, string.Join(',', partitions.Select(p => p.Partition.Value)));
@@ -70,82 +82,20 @@ public abstract class KafkaConsumerBase : BackgroundService
         _processingConcurrencySemaphore = new SemaphoreSlim(_maxConcurrentProcessingTasks, _maxConcurrentProcessingTasks);
     }
 
-    /// <summary>
-    /// Polls for a batch of messages from Kafka with the specified batch size and timeout.
-    /// </summary>
-    /// <param name="maxBatchSize">Maximum number of messages to poll in a single batch.</param>
-    /// <param name="timeoutMs">Timeout in milliseconds for polling operation.</param>
-    /// <returns>Array of consumed message results.</returns>
-    private ConsumeResult<string, string>[] PollBatch(int maxBatchSize, int timeoutMs)
-    {
-        var batch = new List<ConsumeResult<string, string>>();
-        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
-        var startTime = DateTime.UtcNow;
-
-        while (batch.Count < maxBatchSize && (DateTime.UtcNow - startTime) < timeout)
-        {
-            try
-            {
-                var remainingTimeout = timeout - (DateTime.UtcNow - startTime);
-                if (remainingTimeout <= TimeSpan.Zero)
-                {
-                    break;
-                }
-
-                var result = _consumer.Consume(remainingTimeout);
-                if (result != null)
-                {
-                    batch.Add(result);
-                }
-                else
-                {
-                    break;
-                }
-            }
-            catch (ConsumeException ex)
-            {
-                _logger.LogWarning(ex, "// {Class} // Consume exception during batch polling", GetType().Name);
-                break;
-            }
-        }
-
-        return [.. batch];
-    }
-
-    /// <summary>
-    /// Safely commits the offsets for a batch of processed messages.
-    /// </summary>
-    private void SafeBulkCommit(IEnumerable<TopicPartitionOffset> offsets)
-    {
-        if (_isShutdownInitiated || !offsets.Any())
-        {
-            return;
-        }
-
-        try
-        {
-            _consumer.Commit(offsets);
-        }
-        catch (KafkaException ex)
-        {
-            if (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
-            {
-                _logger.LogWarning("// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
-            }
-            else
-            {
-                _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
-            }
-        }
-    }
-
     /// <inheritdoc/>
-    protected override abstract Task ExecuteAsync(CancellationToken stoppingToken);
+    public override void Dispose()
+    {
+        _consumer.Close();
+        _consumer.Dispose();
+
+        GC.SuppressFinalize(this);
+    }
 
     /// <inheritdoc/>
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         _consumer.Subscribe(_topicName);
+
         return base.StartAsync(cancellationToken);
     }
 
@@ -156,18 +106,19 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         _consumer.Unsubscribe();
 
-        Task[] tasks = [.. _inFlightTasks.Values];
-        if (tasks.Length > 0)
+        var processingTasks = _inFlightTasks.Values.ToArray();
+
+        if (processingTasks.Length > 0)
         {
-            _logger.LogInformation("// {Class} // Waiting for {Count} in-flight tasks to complete", GetType().Name, tasks.Length);
+            _logger.LogInformation("// {Class} // Awaiting {Count} in-flight tasks", GetType().Name, processingTasks.Length);
 
             try
             {
-                await Task.WhenAll(tasks);
+                await Task.WhenAll(processingTasks);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "// {Class} // Error while awaiting in-flight tasks during shutdown", GetType().Name);
+                _logger.LogError(ex, "// {Class} // Error awaiting tasks during shutdown", GetType().Name);
             }
         }
 
@@ -175,12 +126,7 @@ public abstract class KafkaConsumerBase : BackgroundService
     }
 
     /// <inheritdoc/>
-    public override void Dispose()
-    {
-        _consumer.Close();
-        _consumer.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    protected override abstract Task ExecuteAsync(CancellationToken stoppingToken);
 
     /// <summary>
     /// Consumes messages from the Kafka topic in batches, ensuring efficient processing
@@ -190,33 +136,27 @@ public abstract class KafkaConsumerBase : BackgroundService
     /// </summary>
     /// <param name="processMessageFunc">A function that takes the message string and processes it asynchronously.</param>
     /// <param name="retryMessageFunc">A function that takes the message string and handles retry logic asynchronously on processing failure.</param>
-    /// <param name="stoppingToken">A cancellation token to signal when to stop consuming messages.</param>
-    protected async Task ConsumeMessage(
-        Func<string, Task> processMessageFunc,
-        Func<string, Task> retryMessageFunc,
-        CancellationToken stoppingToken)
+    /// <param name="cancellationToken">A cancellation token to signal when to stop consuming messages.</param>
+    protected async Task ConsumeMessage(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
     {
-        while (!stoppingToken.IsCancellationRequested && !_isShutdownInitiated)
+        while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
         {
             try
             {
-                // Poll for a batch of messages
-                var batch = PollBatch(_maxMessagesCountInBatch, _messagesBatchPollTimeoutInMs);
-
-                if (batch.Length == 0)
+                var messageBatch = FetchMessageBatch(_maxMessagesCountInBatch, _messagesBatchPollTimeoutInMs, cancellationToken);
+                if (messageBatch.Length == 0)
                 {
-                    await Task.Delay(50, stoppingToken); // Brief pause when no messages
+                    await Task.Delay(50, cancellationToken);
                     continue;
                 }
 
-                var batchStartTime = DateTime.UtcNow;
-                var successfulOffsets = new List<TopicPartitionOffset>();
-                var semaphoreTasks = new List<Task>();
+                var processingTasks = new List<Task>();
+                var processingStartTime = DateTime.UtcNow;
+                var successfulOffsets = new ConcurrentBag<TopicPartitionOffset>();
 
-                // Process batch messages with controlled concurrency
-                foreach (var consumeResult in batch)
+                foreach (var message in messageBatch)
                 {
-                    await _processingConcurrencySemaphore.WaitAsync(stoppingToken).ConfigureAwait(false);
+                    await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
                     var processingTaskId = Guid.NewGuid();
                     var processingTask = Task.Run(
@@ -224,15 +164,9 @@ public abstract class KafkaConsumerBase : BackgroundService
                         {
                             try
                             {
-                                await processMessageFunc(consumeResult.Message.Value).ConfigureAwait(false);
+                                await processMessageFunc(message.Message.Value);
 
-                                // Track successful processing for commit
-                                lock (successfulOffsets)
-                                {
-                                    successfulOffsets.Add(new TopicPartitionOffset(
-                                        consumeResult.TopicPartition,
-                                        consumeResult.Offset + 1)); // Commit next offset
-                                }
+                                successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
                             }
                             catch (OperationCanceledException)
                             {
@@ -242,59 +176,49 @@ public abstract class KafkaConsumerBase : BackgroundService
                             {
                                 try
                                 {
-                                    await retryMessageFunc(consumeResult.Message.Value).ConfigureAwait(false);
-
-                                    // If retry succeeds, still mark for commit
-                                    lock (successfulOffsets)
-                                    {
-                                        successfulOffsets.Add(new TopicPartitionOffset(
-                                            consumeResult.TopicPartition,
-                                            consumeResult.Offset + 1));
-                                    }
+                                    await retryMessageFunc(message.Message.Value);
+                                    successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
                                 }
                                 catch (Exception retryEx)
                                 {
-                                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}", GetType().Name, consumeResult.Offset);
+                                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}", GetType().Name, message.Offset);
                                 }
 
-                                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}", GetType().Name, consumeResult.Offset);
+                                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}", GetType().Name, message.Offset);
                             }
                             finally
                             {
                                 _processingConcurrencySemaphore.Release();
+
                                 _inFlightTasks.TryRemove(processingTaskId, out _);
                             }
                         },
-                        stoppingToken);
+                        cancellationToken);
 
                     _inFlightTasks[processingTaskId] = processingTask;
-                    semaphoreTasks.Add(processingTask);
+                    processingTasks.Add(processingTask);
                 }
 
-                // Wait for all messages in the batch to complete processing
-                await Task.WhenAll(semaphoreTasks);
+                await Task.WhenAll(processingTasks);
 
-                if (successfulOffsets.Count > 0)
+                if (!successfulOffsets.IsEmpty)
                 {
-                    SafeBulkCommit(successfulOffsets);
+                    SafeCommit(successfulOffsets);
                 }
                 else
                 {
-                    _logger.LogWarning("// {Class} // No messages successfully processed in batch of {BatchSize}", GetType().Name, batch.Length);
+                    _logger.LogWarning("// {Class} // No messages successfully processed in batch of {BatchSize}", GetType().Name, messageBatch.Length);
                 }
-
-                var batchDuration = (DateTime.UtcNow - batchStartTime).TotalMilliseconds;
 
                 _logger.LogInformation(
                     "// KafkaConsumerBase // ConsumeMessage // Batch consuming completed for topic {Topic}. Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
                     _topicName,
-                    batch.Length,
-                    batchDuration,
+                    messageBatch.Length,
+                    (DateTime.UtcNow - processingStartTime).TotalMilliseconds,
                     successfulOffsets.Count);
             }
             catch (OperationCanceledException)
             {
-                // Expected during shutdown
                 break;
             }
             catch (Exception ex)
@@ -302,5 +226,92 @@ public abstract class KafkaConsumerBase : BackgroundService
                 _logger.LogError(ex, "// {Class} // Unexpected error in batch processing loop", GetType().Name);
             }
         }
+    }
+
+    /// <summary>
+    /// Commits a batch of processed offsets to Kafka, normalizing duplicates per partition (keeping the highest offset).
+    /// </summary>
+    /// <param name="offsets">The offsets to commit.</param>
+    private void SafeCommit(IEnumerable<TopicPartitionOffset> offsets)
+    {
+        if (_isShutdownInitiated || offsets is null)
+        {
+            return;
+        }
+
+        var normalized = offsets
+            .GroupBy(o => o.TopicPartition)
+            .Select(g =>
+            {
+                var maxOffset = g.Max(o => o.Offset);
+                return new TopicPartitionOffset(g.Key, maxOffset);
+            })
+            .ToList();
+
+        if (normalized.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _consumer.Commit(normalized);
+        }
+        catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+        {
+            _logger.LogWarning(ex, "// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+        }
+        catch (KafkaException ex)
+        {
+            _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Polls messages from the underlying Kafka consumer until one of the stopping conditions is met.
+    /// </summary>
+    /// <param name="maxBatchSize">The maximum number of messages to return.</param>
+    /// <param name="timeoutMs">The total maximum time (in milliseconds) spent polling for this batch.</param>
+    /// <param name="cancellationToken">Token observed for cooperative cancellation.
+    /// <returns>
+    /// An array (possibly empty) of consecutively polled <see cref="ConsumeResult{TKey,TValue}"/> instances.
+    /// </returns>
+    private ConsumeResult<string, string>[] FetchMessageBatch(int maxBatchSize, int timeoutMs, CancellationToken cancellationToken)
+    {
+        if (maxBatchSize <= 0 || timeoutMs <= 0 || cancellationToken.IsCancellationRequested)
+        {
+            return [];
+        }
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        var polledMessages = new List<ConsumeResult<string, string>>(maxBatchSize);
+
+        while (polledMessages.Count < maxBatchSize && !cancellationToken.IsCancellationRequested)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            try
+            {
+                var result = _consumer.Consume(remaining);
+                if (result is null)
+                {
+                    break;
+                }
+
+                polledMessages.Add(result);
+            }
+            catch (ConsumeException ex)
+            {
+                _logger.LogWarning(ex, "// {Class} // Consume exception during batch polling", GetType().Name);
+
+                break;
+            }
+        }
+
+        return [.. polledMessages];
     }
 }

@@ -36,7 +36,7 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
     /// <inheritdoc/>
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        return Task.Run(() => ConsumeMessage(ConsumeEmail, RetryEmail, stoppingToken), stoppingToken);
+        return ConsumeMessage(ConsumeEmail, RetryEmail, stoppingToken);
     }
 
     private async Task ConsumeEmail(string message)

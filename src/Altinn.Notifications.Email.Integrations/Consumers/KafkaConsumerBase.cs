@@ -69,6 +69,10 @@ public abstract class KafkaConsumerBase : BackgroundService
                     _logger.LogWarning("Kafka warning. Code={ErrorCode}. Reason={Reason}", e.Code, e.Reason);
                 }
             })
+            .SetStatisticsHandler((_, json) =>
+            {
+                _logger.LogDebug("// KafkaProducer // Stats: {StatsJson}", json);
+            })
             .SetPartitionsAssignedHandler((_, partitions) =>
             {
                 _logger.LogInformation("// {Class} // Partitions assigned: {Partitions}", GetType().Name, string.Join(',', partitions.Select(p => p.Partition.Value)));

@@ -54,7 +54,6 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
 
             if (result.Status != PersistenceStatus.Persisted)
             {
-                // codeql[cs/exposure-of-sensitive-information] Message content is not sensitive and needed for debugging
                 _logger.LogError("// KafkaProducer // ProduceAsync // Message not ack'd by all brokers (value: '{message}'). Delivery status: {result.Status}", message, result.Status);
                 return false;
             }

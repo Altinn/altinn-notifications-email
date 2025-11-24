@@ -55,14 +55,6 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
 
     private async Task RetryEmail(string message)
     {
-        bool succeeded = Core.Sending.Email.TryParse(message, out Core.Sending.Email email);
-
-        bool produceSucceeded = await _producer.ProduceAsync(_retryTopicName, message);
-
-        if (!produceSucceeded)
-        {
-            string notificationId = succeeded ? email.NotificationId.ToString() : "unknown";
-            _logger.LogError("// SendEmailQueueConsumer // RetryEmail // Failed to produce retry message for notification {NotificationId}", notificationId);
-        }
+        await _producer.ProduceAsync(_retryTopicName, message);
     }
 }

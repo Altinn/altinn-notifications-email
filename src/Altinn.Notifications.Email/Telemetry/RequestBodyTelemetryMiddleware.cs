@@ -30,63 +30,75 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context)
     {
         // Check if it's a POST request
-        if (context.Request.Method == HttpMethods.Post)
+        if (context.Request.Method != HttpMethods.Post)
         {
-            // Allow the body to be read multiple times (rewindable)
-            context.Request.EnableBuffering();
+            await _next(context);
+            return;
+        }
 
-            // Leave the body stream open after reading
-            using var reader = new StreamReader(
-                context.Request.Body,
-                Encoding.UTF8,
-                detectEncodingFromByteOrderMarks: false,
-                bufferSize: 1024,
-                leaveOpen: true);
-            var body = await reader.ReadToEndAsync();
+        // Allow the body to be read multiple times (rewindable)
+        context.Request.EnableBuffering();
 
-            // Reset the stream's position to 0 so the next middleware/controller can read it
-            context.Request.Body.Position = 0;
+        // Leave the body stream open after reading
+        using var reader = new StreamReader(
+            context.Request.Body,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: false,
+            bufferSize: 1024,
+            leaveOpen: true);
+        var body = await reader.ReadToEndAsync();
 
-            if (_parseObject.Equals("deliveryreport", StringComparison.OrdinalIgnoreCase))
-            {
-                var activity = Activity.Current;
-                var deliveryReports = ExtractDeliveryReports(body);
-                ApplyDeliveryReportsToCustomDimensions(deliveryReports, activity);
-            }
+        // Reset the stream's position to 0 so the next middleware/controller can read it
+        context.Request.Body.Position = 0;
 
-            if (_parseObject.Equals("sendoperationresults", StringComparison.OrdinalIgnoreCase))
-            {
-                var activity = Activity.Current;
-                var sendOperationResults = ExtractSendOperationResults(body);
-                ApplyOperationResultsToCusomDimensions(sendOperationResults, activity);
-            }
+        var activity = Activity.Current;
+        if (activity == null)
+        {
+            await _next(context);
+            return;
+        }
+
+        if (_parseObject.Equals("deliveryreport", StringComparison.OrdinalIgnoreCase))
+        {
+            var deliveryReports = ExtractDeliveryReports(body);
+            ApplyDeliveryReportsToCustomDimensions(deliveryReports, activity);
+        }
+        else if (_parseObject.Equals("sendoperationresults", StringComparison.OrdinalIgnoreCase))
+        {
+            var sendOperationResults = ExtractSendOperationResults(body);
+            ApplyOperationResultsToCustomDimensions(sendOperationResults, activity);
         }
 
         // Continue to the next middleware in the pipeline
         await _next(context);
     }
 
-    private static void ApplyDeliveryReportsToCustomDimensions(List<AcsEmailDeliveryReportReceivedEventData> deliveryReports, Activity? activity)
+    private static void ApplyDeliveryReportsToCustomDimensions(List<AcsEmailDeliveryReportReceivedEventData> deliveryReports, Activity activity)
     {
-        if (activity != null && deliveryReports.Count > 0)
+        if (deliveryReports.Count == 0)
         {
-            // Add delivery reports as a custom tag - will appear in Application Insights customDimensions
-            activity.SetTag("DeliveryReports", JsonSerializer.Serialize(deliveryReports));
+            return;
         }
+
+        // Add delivery reports as a custom tag - will appear in Application Insights customDimensions
+        activity.SetTag("DeliveryReports", JsonSerializer.Serialize(deliveryReports));
     }
 
-    private static void ApplyOperationResultsToCusomDimensions(List<SendOperationResult> sendOperationResults, Activity? activity)
+    private static void ApplyOperationResultsToCustomDimensions(List<SendOperationResult> sendOperationResults, Activity activity)
     {
-        if (activity != null && sendOperationResults.Count > 0)
+        if (sendOperationResults.Count == 0)
         {
-            // Add send operation results as a custom tag - will appear in Application Insights customDimensions
-            activity.SetTag("SendOperationResults", JsonSerializer.Serialize(sendOperationResults));
+            return;
         }
+
+        // Add send operation results as a custom tag - will appear in Application Insights customDimensions
+        activity.SetTag("SendOperationResults", JsonSerializer.Serialize(sendOperationResults));
     }
 
     private static List<AcsEmailDeliveryReportReceivedEventData> ExtractDeliveryReports(string body)
     {
         var deliveryReports = new List<AcsEmailDeliveryReportReceivedEventData>();
+        
         if (string.IsNullOrWhiteSpace(body))
         {
             return deliveryReports;
@@ -104,12 +116,10 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             foreach (EventGridEvent eventGridEvent in eventList)
             {
                 // If the event is a system event, TryGetSystemEventData will return the deserialized system event
-                if (eventGridEvent.TryGetSystemEventData(out object systemEvent))
+                if (eventGridEvent.TryGetSystemEventData(out object systemEvent) 
+                    && systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
                 {
-                    if (systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
-                    {
-                        deliveryReports.Add(deliveryReport);
-                    }
+                    deliveryReports.Add(deliveryReport);
                 }
             }
         }
@@ -148,16 +158,14 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             foreach (EventGridEvent eventGridEvent in eventList)
             {
                 // If the event is a system event, TryGetSystemEventData will return the deserialized system event
-                if (eventGridEvent.TryGetSystemEventData(out object systemEvent))
+                if (eventGridEvent.TryGetSystemEventData(out object systemEvent) 
+                    && systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
                 {
-                    if (systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
-                    {
-                        sendOperationResults.Add(new SendOperationResult 
-                        { 
-                            OperationId = deliveryReport.MessageId, 
-                            SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString()) 
-                        });
-                    }
+                    sendOperationResults.Add(new SendOperationResult 
+                    { 
+                        OperationId = deliveryReport.MessageId, 
+                        SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString()) 
+                    });
                 }
             }
         }

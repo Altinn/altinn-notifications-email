@@ -18,6 +18,7 @@ namespace Altinn.Notifications.Email.Telemetry;
 public class RequestBodyTelemetryMiddleware(RequestDelegate next)
 {
     private readonly RequestDelegate _next = next;
+    private readonly string _parseObject = "deliveryreport";
 
     /// <summary>
     /// Invokes the middleware to extract send operation results from EventGrid email delivery report events.
@@ -46,20 +47,78 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             // Reset the stream's position to 0 so the next middleware/controller can read it
             context.Request.Body.Position = 0;
 
-            // Extract send operation results if the body contains EventGrid email delivery report events
-            var sendOperationResults = ExtractSendOperationResults(body);
-            
-            // Get the current Activity (OpenTelemetry tracing context)
-            var activity = Activity.Current;
-            if (activity != null && sendOperationResults.Count > 0)
+            if (_parseObject.Equals("deliveryreport", StringComparison.OrdinalIgnoreCase))
             {
-                // Add send operation results as a custom tag - will appear in Application Insights customDimensions
-                activity.SetTag("SendOperationResults", JsonSerializer.Serialize(sendOperationResults));
+                var activity = Activity.Current;
+                var deliveryReports = ExtractDeliveryReports(body);
+                ApplyDeliveryReportsToCustomDimensions(deliveryReports, activity);
+            }
+
+            if (_parseObject.Equals("sendoperationresults", StringComparison.OrdinalIgnoreCase))
+            {
+                var activity = Activity.Current;
+                var sendOperationResults = ExtractSendOperationResults(body);
+                ApplyOperationResultsToCusomDimensions(sendOperationResults, activity);
             }
         }
 
         // Continue to the next middleware in the pipeline
         await _next(context);
+    }
+
+    private static void ApplyDeliveryReportsToCustomDimensions(List<AcsEmailDeliveryReportReceivedEventData> deliveryReports, Activity? activity)
+    {
+        if (activity != null && deliveryReports.Count > 0)
+        {
+            // Add delivery reports as a custom tag - will appear in Application Insights customDimensions
+            activity.SetTag("DeliveryReports", JsonSerializer.Serialize(deliveryReports));
+        }
+    }
+
+    private static void ApplyOperationResultsToCusomDimensions(List<SendOperationResult> sendOperationResults, Activity? activity)
+    {
+        if (activity != null && sendOperationResults.Count > 0)
+        {
+            // Add send operation results as a custom tag - will appear in Application Insights customDimensions
+            activity.SetTag("SendOperationResults", JsonSerializer.Serialize(sendOperationResults));
+        }
+    }
+
+    private static List<AcsEmailDeliveryReportReceivedEventData> ExtractDeliveryReports(string body)
+    {
+        var deliveryReports = new List<AcsEmailDeliveryReportReceivedEventData>();
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return deliveryReports;
+        }
+
+        try
+        {
+            // Use EventGridEvent.ParseMany to properly deserialize with BinaryData support
+            var eventList = EventGridEvent.ParseMany(BinaryData.FromString(body));
+            if (eventList == null)
+            {
+                return deliveryReports;
+            }
+
+            foreach (EventGridEvent eventGridEvent in eventList)
+            {
+                // If the event is a system event, TryGetSystemEventData will return the deserialized system event
+                if (eventGridEvent.TryGetSystemEventData(out object systemEvent))
+                {
+                    if (systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
+                    {
+                        deliveryReports.Add(deliveryReport);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Not a valid EventGrid event array or parsing failed, return empty list
+        }
+
+        return deliveryReports;
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 
@@ -15,6 +16,7 @@ namespace Altinn.Notifications.Email.Telemetry;
 /// in POST request bodies and adds them as tags to OpenTelemetry Activity for Application Insights tracking.
 /// </summary>
 /// <param name="next">The next middleware delegate in the request pipeline.</param>
+[ExcludeFromCodeCoverage]
 public class RequestBodyTelemetryMiddleware(RequestDelegate next)
 {
     private readonly RequestDelegate _next = next;

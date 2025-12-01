@@ -9,4 +9,10 @@ public class EmailDeliveryReportSettings
     /// Acceskey to be used for authorization
     /// </summary>
     public string AccessKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Toggles whether delivery reports should be logged to Application Insights
+    /// using a custom middleware that intercepts the incoming HTTP requests.
+    /// </summary>
+    public bool LogDeliveryReportsToApplicationInsights { get; set; } = false;
 }

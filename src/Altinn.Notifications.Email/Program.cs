@@ -43,7 +43,12 @@ appBuilder.Services.AddSwaggerGen(c =>
 
 var app = appBuilder.Build();
 
-app.UseRequestBodyTelemetry();
+EmailDeliveryReportSettings emailDeliveryReportSettings = new();
+app.Configuration.GetSection("EmailDeliveryReportSettings").Bind(emailDeliveryReportSettings);
+if (emailDeliveryReportSettings.LogDeliveryReportsToApplicationInsights)
+{
+    app.UseRequestBodyTelemetry();
+}
 
 if (app.Environment.IsDevelopment())
 {

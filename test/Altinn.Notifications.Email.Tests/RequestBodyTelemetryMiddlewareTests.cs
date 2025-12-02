@@ -12,6 +12,7 @@ namespace Altinn.Notifications.Email.Tests;
 public class RequestBodyTelemetryMiddlewareTests
 {
     private const string _realWorldDeliveryEvent = "[{\"id\":\"e000f000-0000-0000-0000-000000000000\",\"topic\":\"/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/microsoft.communication/communicationservices/{acs-resource-name}\",\"subject\":\"sender/sender@mydomain.com/message/f000e000-0000-0000-0000-000000000000\",\"eventType\":\"Microsoft.Communication.EmailDeliveryReportReceived\",\"data\":{\"sender\":\"sender@mydomain.com\",\"recipient\":\"recipient@example.com\",\"messageId\":\"f000e000-0000-0000-0000-000000000000\",\"status\":\"Delivered\",\"deliveryAttemptTimeStamp\":\"2025-11-11T13:58:00.0000000Z\",\"deliveryStatusDetails\":{\"statusMessage\":\"No error.\"}},\"dataVersion\":\"1.0\",\"metadataVersion\":\"1\",\"eventTime\":\"2025-11-11T13:58:00Z\"}]";
+    private readonly string _validationEvent = "[{\"id\": \"2d1781af-3a4c-4d7c-bd0c-e34b19da4e66\",\"topic\": \"/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\",\"subject\": \"\",\"data\": {\"validationCode\": \"512d38b6-c7b8-40c8-89fe-f46f9e9622b6\",\"validationUrl\": \"https://rp-eastus2.eventgrid.azure.net:553/eventsubscriptions/myeventsub/validate?id=0000000000-0000-0000-0000-00000000000000&t=2022-10-28T04:23:35.1981776Z&apiVersion=2018-05-01-preview&token=1A1A1A1A\"},\"eventType\": \"Microsoft.EventGrid.SubscriptionValidationEvent\",\"eventTime\": \"2022-10-28T04:23:35.1981776Z\",\"metadataVersion\": \"1\",\"dataVersion\": \"1\"}]";
     private readonly Microsoft.Extensions.Options.IOptions<EmailDeliveryReportSettings> _options = Microsoft.Extensions.Options.Options.Create(new EmailDeliveryReportSettings());
 
     [Fact]
@@ -146,5 +147,36 @@ public class RequestBodyTelemetryMiddlewareTests
         {
             ParseObject = parseObject
         });
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ParseObjectSendOperationResults_NonDeliveryReportEvent_DoesNotAddTag()
+    {
+        // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var activity = CreateActivity();
+        var options = CreateOptions("sendoperationresults");
+        var middleware = new RequestBodyTelemetryMiddleware(
+            next: (innerHttpContext) => Task.CompletedTask,
+            emailDeliveryReportSettings: options);
+        
+        // Use a validation event which won't produce SendOperationResults
+        var context = CreateHttpContext("POST", _validationEvent);
+
+        // Act
+        await middleware.InvokeAsync(context);
+
+        // Assert
+        Assert.NotNull(activity);
+        var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
+        
+        // No tag should be added when sendOperationResults list is empty
+        Assert.Equal(default, sendOperationResultsTag);
     }
 }

@@ -3,8 +3,8 @@ using System.Text;
 
 using Altinn.Notifications.Email.Configuration;
 using Altinn.Notifications.Email.Telemetry;
-using Microsoft.AspNetCore.Http;
 
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace Altinn.Notifications.Email.Tests;
@@ -15,9 +15,45 @@ public class RequestBodyTelemetryMiddlewareTests
     private readonly Microsoft.Extensions.Options.IOptions<EmailDeliveryReportSettings> _options = Microsoft.Extensions.Options.Options.Create(new EmailDeliveryReportSettings());
 
     [Fact]
+    public async Task InvokeAsync_ParseObjectSendOperationResults_AddsSendOperationResultsTag()
+    {
+        // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var activity = CreateActivity();
+        var options = CreateOptions("sendoperationresults");
+        var middleware = new RequestBodyTelemetryMiddleware(
+            next: (innerHttpContext) => Task.CompletedTask,
+            emailDeliveryReportSettings: options);
+        var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
+
+        // Act
+        await middleware.InvokeAsync(context);
+
+        // Assert
+        Assert.NotNull(activity);
+        var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
+        Assert.NotEqual(default, sendOperationResultsTag);
+        Assert.Contains("f000e000-0000-0000-0000-000000000000", sendOperationResultsTag.Value);
+        Assert.Contains("2", sendOperationResultsTag.Value); // Delivered
+    }
+
+    [Fact]
     public async Task InvokeAsync_CallsNextMiddleware()
     {
         // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+        };
+        ActivitySource.AddActivityListener(listener);
+
         using var activity = CreateActivity();
         bool nextMiddlewareCalled = false;
         var middleware = new RequestBodyTelemetryMiddleware(
@@ -40,6 +76,13 @@ public class RequestBodyTelemetryMiddlewareTests
     public async Task InvokeAsync_PreservesRequestBodyForNextMiddleware()
     {
         // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+        };
+        ActivitySource.AddActivityListener(listener);
+
         using var activity = CreateActivity();
         string? bodyReadByNextMiddleware = null;
         var middleware = new RequestBodyTelemetryMiddleware(
@@ -73,5 +116,13 @@ public class RequestBodyTelemetryMiddlewareTests
         var activity = activitySource.StartActivity("TestActivity");
         Activity.Current = activity;
         return activity!;
+    }
+
+    private static Microsoft.Extensions.Options.IOptions<EmailDeliveryReportSettings> CreateOptions(string parseObject)
+    {
+        return Microsoft.Extensions.Options.Options.Create(new EmailDeliveryReportSettings
+        {
+            ParseObject = parseObject
+        });
     }
 }

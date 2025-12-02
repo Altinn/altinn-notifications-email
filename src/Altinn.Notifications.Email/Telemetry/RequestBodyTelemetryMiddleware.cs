@@ -66,12 +66,12 @@ public class RequestBodyTelemetryMiddleware(
             return;
         }
 
-        if (_settings.ParseObject.Equals("deliveryreport", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(_settings.ParseObject, "deliveryreport", StringComparison.OrdinalIgnoreCase))
         {
             var deliveryReports = ExtractDeliveryReports(body);
             ApplyDeliveryReportsToCustomDimensions(deliveryReports, activity);
         }
-        else if (_settings.ParseObject.Equals("sendoperationresults", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(_settings.ParseObject, "sendoperationresults", StringComparison.OrdinalIgnoreCase))
         {
             var sendOperationResults = ExtractSendOperationResults(body);
             ApplyOperationResultsToCustomDimensions(sendOperationResults, activity);

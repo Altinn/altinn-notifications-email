@@ -3,11 +3,14 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 
+using Altinn.Notifications.Email.Configuration;
 using Altinn.Notifications.Email.Core.Status;
 using Altinn.Notifications.Email.Mappers;
 
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.EventGrid.SystemEvents;
+
+using Microsoft.Extensions.Options;
 
 namespace Altinn.Notifications.Email.Telemetry;
 
@@ -16,11 +19,14 @@ namespace Altinn.Notifications.Email.Telemetry;
 /// in POST request bodies and adds them as tags to OpenTelemetry Activity for Application Insights tracking.
 /// </summary>
 /// <param name="next">The next middleware delegate in the request pipeline.</param>
+/// <param name="emailDeliveryReportSettings">Configuration settings for email delivery reports.</param>
 [ExcludeFromCodeCoverage]
-public class RequestBodyTelemetryMiddleware(RequestDelegate next)
+public class RequestBodyTelemetryMiddleware(
+    RequestDelegate next,
+    IOptions<EmailDeliveryReportSettings> emailDeliveryReportSettings)
 {
     private readonly RequestDelegate _next = next;
-    private readonly string _parseObject = "deliveryreport";
+    private readonly EmailDeliveryReportSettings _settings = emailDeliveryReportSettings.Value;
 
     /// <summary>
     /// Invokes the middleware to extract send operation results from EventGrid email delivery report events.
@@ -60,12 +66,12 @@ public class RequestBodyTelemetryMiddleware(RequestDelegate next)
             return;
         }
 
-        if (_parseObject.Equals("deliveryreport", StringComparison.OrdinalIgnoreCase))
+        if (_settings.ParseObject.Equals("deliveryreport", StringComparison.OrdinalIgnoreCase))
         {
             var deliveryReports = ExtractDeliveryReports(body);
             ApplyDeliveryReportsToCustomDimensions(deliveryReports, activity);
         }
-        else if (_parseObject.Equals("sendoperationresults", StringComparison.OrdinalIgnoreCase))
+        else if (_settings.ParseObject.Equals("sendoperationresults", StringComparison.OrdinalIgnoreCase))
         {
             var sendOperationResults = ExtractSendOperationResults(body);
             ApplyOperationResultsToCustomDimensions(sendOperationResults, activity);

@@ -15,4 +15,9 @@ public class EmailDeliveryReportSettings
     /// using a custom middleware that intercepts the incoming HTTP requests.
     /// </summary>
     public bool LogDeliveryReportsToApplicationInsights { get; set; } = false;
+
+    /// <summary>
+    /// The type of object to parse from the incoming request body.
+    /// </summary>
+    public string ParseObject { get; set; } = "deliveryreport";
 }

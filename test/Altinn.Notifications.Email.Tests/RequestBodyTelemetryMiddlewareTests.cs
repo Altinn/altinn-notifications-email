@@ -26,22 +26,26 @@ public class RequestBodyTelemetryMiddlewareTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        using var activity = CreateActivity();
-        var options = CreateOptions("sendoperationresults");
-        var middleware = new RequestBodyTelemetryMiddleware(
-            next: (innerHttpContext) => Task.CompletedTask,
-            emailDeliveryReportSettings: options);
-        var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
+        var (activitySource, activity) = CreateActivity();
+        using (activitySource)
+        using (activity)
+        {
+            var options = CreateOptions("sendoperationresults");
+            var middleware = new RequestBodyTelemetryMiddleware(
+                next: (innerHttpContext) => Task.CompletedTask,
+                emailDeliveryReportSettings: options);
+            var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
 
-        // Act
-        await middleware.InvokeAsync(context);
+            // Act
+            await middleware.InvokeAsync(context);
 
-        // Assert
-        Assert.NotNull(activity);
-        var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
-        Assert.NotEqual(default, sendOperationResultsTag);
-        Assert.Contains("f000e000-0000-0000-0000-000000000000", sendOperationResultsTag.Value);
-        Assert.Contains("2", sendOperationResultsTag.Value); // Delivered
+            // Assert
+            Assert.NotNull(activity);
+            var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
+            Assert.NotEqual(default, sendOperationResultsTag);
+            Assert.Contains("f000e000-0000-0000-0000-000000000000", sendOperationResultsTag.Value);
+            Assert.Contains("2", sendOperationResultsTag.Value); // Delivered
+        }
     }
 
     [Fact]
@@ -55,22 +59,26 @@ public class RequestBodyTelemetryMiddlewareTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        using var activity = CreateActivity();
-        bool nextMiddlewareCalled = false;
-        var middleware = new RequestBodyTelemetryMiddleware(
-            next: (innerHttpContext) =>
-            {
-                nextMiddlewareCalled = true;
-                return Task.CompletedTask;
-            },
-            emailDeliveryReportSettings: _options);
-        var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
+        var (activitySource, activity) = CreateActivity();
+        using (activitySource)
+        using (activity)
+        {
+            bool nextMiddlewareCalled = false;
+            var middleware = new RequestBodyTelemetryMiddleware(
+                next: (innerHttpContext) =>
+                {
+                    nextMiddlewareCalled = true;
+                    return Task.CompletedTask;
+                },
+                emailDeliveryReportSettings: _options);
+            var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
 
-        // Act
-        await middleware.InvokeAsync(context);
+            // Act
+            await middleware.InvokeAsync(context);
 
-        // Assert
-        Assert.True(nextMiddlewareCalled);
+            // Assert
+            Assert.True(nextMiddlewareCalled);
+        }
     }
 
     [Fact]
@@ -106,22 +114,26 @@ public class RequestBodyTelemetryMiddlewareTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        using var activity = CreateActivity();
-        string? bodyReadByNextMiddleware = null;
-        var middleware = new RequestBodyTelemetryMiddleware(
-            next: async (innerHttpContext) =>
-            {
-                using var reader = new StreamReader(innerHttpContext.Request.Body);
-                bodyReadByNextMiddleware = await reader.ReadToEndAsync();
-            },
-            emailDeliveryReportSettings: _options);
-        var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
+        var (activitySource, activity) = CreateActivity();
+        using (activitySource)
+        using (activity)
+        {
+            string? bodyReadByNextMiddleware = null;
+            var middleware = new RequestBodyTelemetryMiddleware(
+                next: async (innerHttpContext) =>
+                {
+                    using var reader = new StreamReader(innerHttpContext.Request.Body);
+                    bodyReadByNextMiddleware = await reader.ReadToEndAsync();
+                },
+                emailDeliveryReportSettings: _options);
+            var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
 
-        // Act
-        await middleware.InvokeAsync(context);
+            // Act
+            await middleware.InvokeAsync(context);
 
-        // Assert
-        Assert.Equal(_realWorldDeliveryEvent, bodyReadByNextMiddleware);
+            // Assert
+            Assert.Equal(_realWorldDeliveryEvent, bodyReadByNextMiddleware);
+        }
     }
 
     private static DefaultHttpContext CreateHttpContext(string method, string body)
@@ -133,12 +145,12 @@ public class RequestBodyTelemetryMiddlewareTests
         return context;
     }
 
-    private static Activity CreateActivity()
+    private static (ActivitySource ActivitySource, Activity Activity) CreateActivity()
     {
         var activitySource = new ActivitySource("TestSource");
         var activity = activitySource.StartActivity("TestActivity");
         Activity.Current = activity;
-        return activity!;
+        return (activitySource, activity!);
     }
 
     private static Microsoft.Extensions.Options.IOptions<EmailDeliveryReportSettings> CreateOptions(string parseObject)
@@ -160,23 +172,27 @@ public class RequestBodyTelemetryMiddlewareTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        using var activity = CreateActivity();
-        var options = CreateOptions("sendoperationresults");
-        var middleware = new RequestBodyTelemetryMiddleware(
-            next: (innerHttpContext) => Task.CompletedTask,
-            emailDeliveryReportSettings: options);
-        
-        // Use a validation event which won't produce SendOperationResults
-        var context = CreateHttpContext("POST", _validationEvent);
+        var (activitySource, activity) = CreateActivity();
+        using (activitySource)
+        using (activity)
+        {
+            var options = CreateOptions("sendoperationresults");
+            var middleware = new RequestBodyTelemetryMiddleware(
+                next: (innerHttpContext) => Task.CompletedTask,
+                emailDeliveryReportSettings: options);
 
-        // Act
-        await middleware.InvokeAsync(context);
+            // Use a validation event which won't produce SendOperationResults
+            var context = CreateHttpContext("POST", _validationEvent);
 
-        // Assert
-        Assert.NotNull(activity);
-        var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
-        
-        // No tag should be added when sendOperationResults list is empty
-        Assert.Equal(default, sendOperationResultsTag);
+            // Act
+            await middleware.InvokeAsync(context);
+
+            // Assert
+            Assert.NotNull(activity);
+            var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
+
+            // No tag should be added when sendOperationResults list is empty
+            Assert.Equal(default, sendOperationResultsTag);
+        }
     }
 }

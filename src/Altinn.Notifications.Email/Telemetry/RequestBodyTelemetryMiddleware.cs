@@ -169,11 +169,18 @@ public class RequestBodyTelemetryMiddleware(
                 if (eventGridEvent.TryGetSystemEventData(out object systemEvent) 
                     && systemEvent is AcsEmailDeliveryReportReceivedEventData deliveryReport)
                 {
-                    sendOperationResults.Add(new SendOperationResult 
-                    { 
-                        OperationId = deliveryReport.MessageId, 
-                        SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString()) 
-                    });
+                    try
+                    {
+                        sendOperationResults.Add(new SendOperationResult 
+                        {
+                            OperationId = deliveryReport.MessageId,
+                            SendResult = EmailSendResultMapper.ParseDeliveryStatus(deliveryReport.Status?.ToString())
+                        });
+                    }
+                    catch (ArgumentException)
+                    {
+                        // skip unknown delivery status values
+                    }
                 }
             }
         }

@@ -195,4 +195,41 @@ public class RequestBodyTelemetryMiddlewareTests
             Assert.Equal(default, sendOperationResultsTag);
         }
     }
+
+    [Fact]
+    public async Task InvokeAsync_ParseObjectDeliveryReport_InvalidEmailAddress_DoesNotMaskRecipient()
+    {
+        // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var (activitySource, activity) = CreateActivity();
+        using (activitySource)
+        using (activity)
+        {
+            var options = CreateOptions("deliveryreport");
+            var middleware = new RequestBodyTelemetryMiddleware(
+                next: (innerHttpContext) => Task.CompletedTask,
+                emailDeliveryReportSettings: options);
+
+            // Event with invalid email address (missing domain)
+            const string deliveryEventWithInvalidEmail = "[{\"id\":\"e000f000-0000-0000-0000-000000000000\",\"topic\":\"/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/microsoft.communication/communicationservices/{acs-resource-name}\",\"subject\":\"sender/sender@mydomain.com/message/f000e000-0000-0000-0000-000000000000\",\"eventType\":\"Microsoft.Communication.EmailDeliveryReportReceived\",\"data\":{\"sender\":\"sender@mydomain.com\",\"recipient\":\"invalid-email-address\",\"messageId\":\"f000e000-0000-0000-0000-000000000000\",\"status\":\"Delivered\",\"deliveryAttemptTimeStamp\":\"2025-11-11T13:58:00.0000000Z\",\"deliveryStatusDetails\":{\"statusMessage\":\"No error.\"}},\"dataVersion\":\"1.0\",\"metadataVersion\":\"1\",\"eventTime\":\"2025-11-11T13:58:00Z\"}]";
+            var context = CreateHttpContext("POST", deliveryEventWithInvalidEmail);
+
+            // Act
+            await middleware.InvokeAsync(context);
+
+            // Assert
+            Assert.NotNull(activity);
+            var deliveryReportsTag = activity.Tags.FirstOrDefault(t => t.Key == "DeliveryReports");
+
+            // Verify the invalid email address is preserved as-is (not masked)
+            Assert.Contains("invalid-email-address", deliveryReportsTag.Value);
+            Assert.Contains("f000e000-0000-0000-0000-000000000000", deliveryReportsTag.Value);
+        }
+    }
 }

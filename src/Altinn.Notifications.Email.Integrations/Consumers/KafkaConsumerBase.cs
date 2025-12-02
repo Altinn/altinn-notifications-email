@@ -11,6 +11,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers;
 
 /// <summary>
 /// Abstract base class for Kafka consumers, providing a framework for consuming messages from a specified topic.
+/// Maximizes throughput with bounded parallelism while enforcing: do not start more messages after the first failure
+/// (including failed retry). Already-started messages finish; contiguous successes are committed.
 /// </summary>
 public abstract class KafkaConsumerBase : BackgroundService
 {
@@ -19,9 +21,9 @@ public abstract class KafkaConsumerBase : BackgroundService
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
 
-    private const int _maxMessagesCountInBatch = 200;
+    private const int _maxMessagesCountInBatch = 250;
     private const int _messagesBatchPollTimeoutInMs = 100;
-    private const int _maxConcurrentProcessingTasks = 100;
+    private const int _maxConcurrentProcessingTasks = 250;
 
     private readonly SemaphoreSlim _processingConcurrencySemaphore;
     private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
@@ -125,15 +127,25 @@ public abstract class KafkaConsumerBase : BackgroundService
                     messageBatch[^1].Offset,
                     _inFlightTasks.Count);
 
-                var processingTasks = new List<Task>();
                 var processingStartTime = DateTime.UtcNow;
+
+                int failureDetectedFlag = 0;
+
                 var successfulOffsets = new ConcurrentBag<TopicPartitionOffset>();
+                var launchedTasks = new List<Task>(messageBatch.Length);
+                var launchedMessages = new List<ConsumeResult<string, string>>(messageBatch.Length);
 
                 foreach (var message in messageBatch)
                 {
+                    if (Volatile.Read(ref failureDetectedFlag) == 1 || cancellationToken.IsCancellationRequested || _isShutdownInitiated)
+                    {
+                        break;
+                    }
+
                     await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
                     var processingTaskId = Guid.NewGuid();
+                    launchedMessages.Add(message);
 
                     _logger.LogInformation("// {Class} // Start processing message at offset {Offset}", GetType().Name, message.Offset);
 
@@ -142,13 +154,20 @@ public abstract class KafkaConsumerBase : BackgroundService
                         {
                             try
                             {
+                                if (Volatile.Read(ref failureDetectedFlag) == 1)
+                                {
+                                    return;
+                                }
+
                                 await processMessageFunc(message.Message.Value);
+
                                 successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
+
                                 _logger.LogInformation("// {Class} // Successfully processed message at offset {Offset}", GetType().Name, message.Offset);
                             }
                             catch (OperationCanceledException)
                             {
-                                // Shutdown scenario - don't retry
+                                Interlocked.CompareExchange(ref failureDetectedFlag, 1, 0);
                             }
                             catch (Exception ex)
                             {
@@ -164,44 +183,64 @@ public abstract class KafkaConsumerBase : BackgroundService
                                 }
                                 catch (Exception retryEx)
                                 {
-                                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}", GetType().Name, message.Offset);
+                                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, message.Offset);
+                                    Interlocked.CompareExchange(ref failureDetectedFlag, 1, 0);
                                 }
                             }
                             finally
                             {
                                 _processingConcurrencySemaphore.Release();
-
                                 _inFlightTasks.TryRemove(processingTaskId, out _);
-
                                 _logger.LogInformation("// {Class} // Released semaphore for message at offset {Offset}. In-flight tasks: {InFlight}", GetType().Name, message.Offset, _inFlightTasks.Count);
                             }
                         },
                         cancellationToken);
 
                     _inFlightTasks[processingTaskId] = processingTask;
-
-                    processingTasks.Add(processingTask);
+                    launchedTasks.Add(processingTask);
                 }
 
-                await Task.WhenAll(processingTasks);
+                try
+                {
+                    await Task.WhenAll(launchedTasks);
+                }
+                catch (Exception aggregateEx)
+                {
+                    _logger.LogDebug(aggregateEx, "// {Class} // Aggregate completion contained failures", GetType().Name);
+                }
 
                 if (!successfulOffsets.IsEmpty)
                 {
-                    _logger.LogInformation("// {Class} // Committing {Count} offsets to Kafka", GetType().Name, successfulOffsets.Count);
+                    _logger.LogInformation(
+                        "// {Class} // Computing contiguous commit offsets from {Count} successes. FailureDetected={Failure}",
+                        GetType().Name,
+                        successfulOffsets.Count,
+                        Volatile.Read(ref failureDetectedFlag) == 1);
 
-                    SafeCommit(successfulOffsets);
+                    var commitCandidates = ComputeContiguousCommitOffsets(launchedMessages.ToArray(), successfulOffsets);
+
+                    if (commitCandidates.Count != 0)
+                    {
+                        _logger.LogInformation("// {Class} // Committing {Count} offsets to Kafka", GetType().Name, commitCandidates.Count);
+                        SafeCommit(commitCandidates);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("// {Class} // No contiguous offsets eligible for commit in launched set of {Launched}", GetType().Name, launchedMessages.Count);
+                    }
                 }
                 else
                 {
-                    _logger.LogWarning("// {Class} // No messages successfully processed in batch of {BatchSize}", GetType().Name, messageBatch.Length);
+                    _logger.LogWarning("// {Class} // No messages successfully processed in launched set of {Launched}", GetType().Name, launchedMessages.Count);
                 }
 
                 _logger.LogInformation(
-                    "// KafkaConsumerBase // ConsumeMessage // Batch consuming completed for topic {Topic}. Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
+                    "// KafkaConsumerBase // ConsumeMessage // Batch completed for topic {Topic}. Launched={Launched} Polled={Polled} FailureDetected={Failure} Duration={Duration:F0}ms",
                     _topicName,
+                    launchedMessages.Count,
                     messageBatch.Length,
-                    (DateTime.UtcNow - processingStartTime).TotalMilliseconds,
-                    successfulOffsets.Count);
+                    Volatile.Read(ref failureDetectedFlag) == 1,
+                    (DateTime.UtcNow - processingStartTime).TotalMilliseconds);
             }
             catch (OperationCanceledException)
             {
@@ -271,7 +310,7 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         var consumerConfig = new ConsumerConfig(config.ConsumerConfig)
         {
-            FetchWaitMaxMs = 25,
+            FetchWaitMaxMs = 50,
             QueuedMinMessages = 1000,
             SessionTimeoutMs = 30000,
             EnableAutoCommit = false,
@@ -296,12 +335,6 @@ public abstract class KafkaConsumerBase : BackgroundService
     /// <returns>
     /// A configured <see cref="IConsumer{TKey, TValue}"/> for consuming messages with string keys and values.
     /// </returns>
-    /// <remarks>
-    /// The consumer includes:
-    /// - Error handling that logs fatal, error, and warning conditions.
-    /// - Statistics logging for operational insights.
-    /// - Partition assignment and revocation handlers to trace rebalances.
-    /// </remarks>
     private IConsumer<string, string> BuildConsumer(ConsumerConfig consumerConfig)
     {
         return new ConsumerBuilder<string, string>(consumerConfig)
@@ -380,5 +413,62 @@ public abstract class KafkaConsumerBase : BackgroundService
         _logger.LogInformation("// {Class} // Fetched {Count} messages from Kafka in batch", GetType().Name, polledMessages.Count);
 
         return [.. polledMessages];
+    }
+
+    /// <summary>
+    /// Computes per-partition commit offsets as the largest contiguous prefix of successful messages from the earliest offset in the launched subset.
+    /// Prevents committing past gaps caused by failures.
+    /// </summary>
+    private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(
+        ConsumeResult<string, string>[] launchedBatch,
+        IEnumerable<TopicPartitionOffset> successfulOffsets)
+    {
+        var successesByTp = successfulOffsets
+            .GroupBy(s => s.TopicPartition)
+            .ToDictionary(
+                g => g.Key,
+                g => new HashSet<long>(g.Select(s => s.Offset.Value)));
+
+        var batchByTp = launchedBatch
+            .GroupBy(m => m.TopicPartition)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(m => m.Offset.Value).OrderBy(x => x).ToList());
+
+        var commitOffsets = new List<TopicPartitionOffset>();
+
+        foreach (var kvp in batchByTp)
+        {
+            var topicPartition = kvp.Key;
+            var orderedOffsets = kvp.Value;
+
+            if (!successesByTp.TryGetValue(topicPartition, out var successSet) || successSet.Count == 0)
+            {
+                continue;
+            }
+
+            long? lastContiguousNext = null;
+
+            foreach (var offset in orderedOffsets)
+            {
+                var nextPosition = offset + 1;
+
+                if (successSet.Contains(nextPosition))
+                {
+                    lastContiguousNext = nextPosition;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (lastContiguousNext.HasValue)
+            {
+                commitOffsets.Add(new TopicPartitionOffset(topicPartition, new Offset(lastContiguousNext.Value)));
+            }
+        }
+
+        return commitOffsets;
     }
 }

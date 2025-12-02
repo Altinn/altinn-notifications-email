@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace Altinn.Notifications.Integrations.Kafka.Consumers;
 
 /// <summary>
-/// Abstract base class for Kafka consumers, providing a framework for consuming messages from a specified topic.
+/// Represents a framework for consuming messages from a specified Kafka topic.
 /// </summary>
 public abstract class KafkaConsumerBase : BackgroundService
 {
@@ -19,12 +19,13 @@ public abstract class KafkaConsumerBase : BackgroundService
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
 
-    private const int _maxMessagesCountInBatch = 200;
+    private const int _maxMessagesCountInBatch = 250;
     private const int _messagesBatchPollTimeoutInMs = 100;
-    private const int _maxConcurrentProcessingTasks = 100;
+    private const int _maxConcurrentProcessingTasks = 250;
 
     private readonly SemaphoreSlim _processingConcurrencySemaphore;
     private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
+    private readonly ConcurrentDictionary<TopicPartition, long> _lastCommittedOffsets = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
@@ -118,90 +119,373 @@ public abstract class KafkaConsumerBase : BackgroundService
                 }
 
                 _logger.LogInformation(
-                    "// {Class} // Polled {BatchSize} messages. Offsets {StartOffset}..{EndOffset}. In-flight tasks: {InFlight}",
+                    "// {Class} // Polled {BatchSize} messages. Offsets {StartOffset}..{EndOffset}. In-flight partition tasks: {InFlight}",
                     GetType().Name,
                     messageBatch.Length,
                     messageBatch[0].Offset,
                     messageBatch[^1].Offset,
                     _inFlightTasks.Count);
 
-                var processingTasks = new List<Task>();
                 var processingStartTime = DateTime.UtcNow;
-                var successfulOffsets = new ConcurrentBag<TopicPartitionOffset>();
 
-                foreach (var message in messageBatch)
+                var partitionGroups = messageBatch
+                    .GroupBy(e => e.TopicPartition)
+                    .Select(e => e.OrderBy(e => e.Offset).ToArray())
+                    .ToArray();
+
+                var partitionTasks = new List<Task>();
+                var commitOffsets = new ConcurrentBag<TopicPartitionOffset>();
+
+                foreach (var partitionMessages in partitionGroups)
                 {
                     await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
-                    var processingTaskId = Guid.NewGuid();
+                    var taskId = Guid.NewGuid();
+                    var partition = partitionMessages[0].TopicPartition;
 
-                    _logger.LogInformation("// {Class} // Start processing message at offset {Offset}", GetType().Name, message.Offset);
-
-                    var processingTask = Task.Run(
+                    var task = Task.Run(
                         async () =>
                         {
+                            long lastSuccessfulOffset = -1;
                             try
                             {
-                                await processMessageFunc(message.Message.Value);
-                                successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
-                                _logger.LogInformation("// {Class} // Successfully processed message at offset {Offset}", GetType().Name, message.Offset);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                // Shutdown scenario - don't retry
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, message.Offset);
+                                _logger.LogInformation(
+                                    "// {Class} // Start processing partition {Partition} batch size {Count} (offsets {Start}..{End})",
+                                    GetType().Name,
+                                    partition.Partition.Value,
+                                    partitionMessages.Length,
+                                    partitionMessages[0].Offset,
+                                    partitionMessages[^1].Offset);
 
-                                try
+                                foreach (var message in partitionMessages)
                                 {
-                                    await retryMessageFunc(message.Message.Value);
+                                    if (_isShutdownInitiated || cancellationToken.IsCancellationRequested)
+                                    {
+                                        break;
+                                    }
 
-                                    successfulOffsets.Add(new TopicPartitionOffset(message.TopicPartition, message.Offset + 1));
+                                    try
+                                    {
+                                        await processMessageFunc(message.Message.Value);
+                                        lastSuccessfulOffset = message.Offset;
+                                        _logger.LogInformation(
+                                            "// {Class} // Processed partition {Partition} offset {Offset}",
+                                            GetType().Name,
+                                            partition.Partition.Value,
+                                            message.Offset);
+                                    }
+                                    catch (OperationCanceledException)
+                                    {
+                                        break;
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(
+                                            ex,
+                                            "// {Class} // Error processing partition {Partition} offset {Offset}, attempting retry",
+                                            GetType().Name,
+                                            partition.Partition.Value,
+                                            message.Offset);
 
-                                    _logger.LogInformation("// {Class} // Retry succeeded for message at offset {Offset}", GetType().Name, message.Offset);
+                                        try
+                                        {
+                                            await retryMessageFunc(message.Message.Value);
+                                            lastSuccessfulOffset = message.Offset;
+
+                                            _logger.LogInformation(
+                                                "// {Class} // Retry succeeded partition {Partition} offset {Offset}",
+                                                GetType().Name,
+                                                partition.Partition.Value,
+                                                message.Offset);
+                                        }
+                                        catch (Exception retryEx)
+                                        {
+                                            _logger.LogError(
+                                                retryEx,
+                                                "// {Class} // Retry failed partition {Partition} offset {Offset}. Halting further processing in this partition for this batch",
+                                                GetType().Name,
+                                                partition.Partition.Value,
+                                                message.Offset);
+                                            break;
+                                        }
+                                    }
                                 }
-                                catch (Exception retryEx)
+
+                                if (lastSuccessfulOffset >= 0)
                                 {
-                                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}", GetType().Name, message.Offset);
+                                    var previousCommitted = _lastCommittedOffsets.GetOrAdd(partition, -1);
+
+                                    if (lastSuccessfulOffset > previousCommitted)
+                                    {
+                                        // Commit the next offset to consume.
+                                        var nextOffset = lastSuccessfulOffset + 1;
+                                        commitOffsets.Add(new TopicPartitionOffset(partition, new Offset(nextOffset)));
+                                        _lastCommittedOffsets[partition] = lastSuccessfulOffset;
+
+                                        _logger.LogInformation(
+                                            "// {Class} // Partition {Partition} prepared commit next offset {NextOffset} (last successful {LastOffset})",
+                                            GetType().Name,
+                                            partition.Partition.Value,
+                                            nextOffset,
+                                            lastSuccessfulOffset);
+                                    }
+                                    else
+                                    {
+                                        _logger.LogDebug(
+                                            "// {Class} // Partition {Partition} no new progress (last successful {LastOffset}, previously committed {PrevCommitted})",
+                                            GetType().Name,
+                                            partition.Partition.Value,
+                                            lastSuccessfulOffset,
+                                            previousCommitted);
+                                    }
+                                }
+                                else
+                                {
+                                    _logger.LogWarning(
+                                        "// {Class} // Partition {Partition} no messages processed successfully in this batch",
+                                        GetType().Name,
+                                        partition.Partition.Value);
                                 }
                             }
                             finally
                             {
                                 _processingConcurrencySemaphore.Release();
-
-                                _inFlightTasks.TryRemove(processingTaskId, out _);
-
-                                _logger.LogInformation("// {Class} // Released semaphore for message at offset {Offset}. In-flight tasks: {InFlight}", GetType().Name, message.Offset, _inFlightTasks.Count);
+                                _inFlightTasks.TryRemove(taskId, out _);
                             }
                         },
                         cancellationToken);
 
-                    _inFlightTasks[processingTaskId] = processingTask;
-
-                    processingTasks.Add(processingTask);
+                    _inFlightTasks[taskId] = task;
+                    partitionTasks.Add(task);
                 }
 
-                await Task.WhenAll(processingTasks);
+                await Task.WhenAll(partitionTasks);
 
-                if (!successfulOffsets.IsEmpty)
+                if (!commitOffsets.IsEmpty)
                 {
-                    _logger.LogInformation("// {Class} // Committing {Count} offsets to Kafka", GetType().Name, successfulOffsets.Count);
-
-                    SafeCommit(successfulOffsets);
+                    _logger.LogInformation("// {Class} // Committing {Count} partition offsets", GetType().Name, commitOffsets.Count);
+                    SafeCommit(commitOffsets);
                 }
                 else
                 {
-                    _logger.LogWarning("// {Class} // No messages successfully processed in batch of {BatchSize}", GetType().Name, messageBatch.Length);
+                    _logger.LogWarning("// {Class} // No offsets eligible for commit in this batch (size {BatchSize})", GetType().Name, messageBatch.Length);
                 }
 
                 _logger.LogInformation(
-                    "// KafkaConsumerBase // ConsumeMessage // Batch consuming completed for topic {Topic}. Processed batch of {BatchSize} messages in {Duration:F0}ms, committed {CommittedCount} offsets",
+                    "// KafkaConsumerBase // ConsumeMessage // Batch completed topic {Topic}. Messages {BatchSize} in {Duration:F0}ms, committed {CommittedCount} partition offsets",
                     _topicName,
                     messageBatch.Length,
                     (DateTime.UtcNow - processingStartTime).TotalMilliseconds,
-                    successfulOffsets.Count);
+                    commitOffsets.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "// {Class} // Unexpected error in batch processing loop", GetType().Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Consumes messages from the Kafka topic using partition-level batch processing.
+    /// Applies batch processing function to all messages within a partition, with safe commit handling.
+    /// </summary>
+    /// <param name="processBatchFunc">Function to process a batch of messages from a single partition.</param>
+    /// <param name="retryMessageFunc">Function to retry a single message if batch processing fails.</param>
+    /// <param name="cancellationToken">Cancellation token to signal cancellation.</param>
+    protected async Task ConsumeMessageBatch(
+        Func<IEnumerable<string>, Task> processBatchFunc,
+        Func<string, Task> retryMessageFunc,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
+        {
+            try
+            {
+                var messageBatch = FetchMessageBatch(_maxMessagesCountInBatch, _messagesBatchPollTimeoutInMs, cancellationToken);
+                if (messageBatch.Length == 0)
+                {
+                    await Task.Delay(10, cancellationToken);
+                    continue;
+                }
+
+                _logger.LogInformation(
+                    "// {Class} // Polled {BatchSize} messages for batch processing. Offsets {StartOffset}..{EndOffset}. In-flight partition tasks: {InFlight}",
+                    GetType().Name,
+                    messageBatch.Length,
+                    messageBatch[0].Offset,
+                    messageBatch[^1].Offset,
+                    _inFlightTasks.Count);
+
+                var processingStartTime = DateTime.UtcNow;
+
+                // Group by partition; maintain ordering inside each group.
+                var partitionGroups = messageBatch
+                    .GroupBy(m => m.TopicPartition)
+                    .Select(g => g.OrderBy(m => m.Offset).ToArray())
+                    .ToArray();
+
+                var partitionTasks = new List<Task>();
+                var commitOffsets = new ConcurrentBag<TopicPartitionOffset>();
+
+                foreach (var partitionMessages in partitionGroups)
+                {
+                    await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
+
+                    var taskId = Guid.NewGuid();
+                    var partition = partitionMessages[0].TopicPartition;
+
+                    var task = Task.Run(
+                        async () =>
+                        {
+                            long lastSuccessfulOffset = -1;
+                            try
+                            {
+                                _logger.LogInformation(
+                                    "// {Class} // Start batch processing partition {Partition} batch size {Count} (offsets {Start}..{End})",
+                                    GetType().Name,
+                                    partition.Partition.Value,
+                                    partitionMessages.Length,
+                                    partitionMessages[0].Offset,
+                                    partitionMessages[^1].Offset);
+
+                                var messageValues = partitionMessages.Select(m => m.Message.Value).ToArray();
+
+                                try
+                                {
+                                    // Try to process the entire batch at once
+                                    await processBatchFunc(messageValues);
+
+                                    // If batch processing succeeds, mark all messages as successfully processed
+                                    lastSuccessfulOffset = partitionMessages[^1].Offset;
+
+                                    _logger.LogInformation(
+                                        "// {Class} // Successfully batch processed partition {Partition} {Count} messages (offsets {Start}..{End})",
+                                        GetType().Name,
+                                        partition.Partition.Value,
+                                        partitionMessages.Length,
+                                        partitionMessages[0].Offset,
+                                        partitionMessages[^1].Offset);
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    // Don't process individual messages if cancelled
+                                    return;
+                                }
+                                catch (Exception batchEx)
+                                {
+                                    _logger.LogError(
+                                        batchEx,
+                                        "// {Class} // Batch processing failed for partition {Partition}, falling back to individual message processing",
+                                        GetType().Name,
+                                        partition.Partition.Value);
+
+                                    // Fallback: Process messages individually with retry logic
+                                    foreach (var message in partitionMessages)
+                                    {
+                                        if (_isShutdownInitiated || cancellationToken.IsCancellationRequested)
+                                        {
+                                            break;
+                                        }
+
+                                        try
+                                        {
+                                            await retryMessageFunc(message.Message.Value);
+                                            lastSuccessfulOffset = message.Offset;
+
+                                            _logger.LogInformation(
+                                                "// {Class} // Individual retry succeeded partition {Partition} offset {Offset}",
+                                                GetType().Name,
+                                                partition.Partition.Value,
+                                                message.Offset);
+                                        }
+                                        catch (OperationCanceledException)
+                                        {
+                                            break;
+                                        }
+                                        catch (Exception retryEx)
+                                        {
+                                            _logger.LogError(
+                                                retryEx,
+                                                "// {Class} // Individual retry failed partition {Partition} offset {Offset}. Halting further processing in this partition for this batch",
+                                                GetType().Name,
+                                                partition.Partition.Value,
+                                                message.Offset);
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Commit logic - same as single message processing
+                                if (lastSuccessfulOffset >= 0)
+                                {
+                                    var previousCommitted = _lastCommittedOffsets.GetOrAdd(partition, -1);
+
+                                    if (lastSuccessfulOffset > previousCommitted)
+                                    {
+                                        // Commit the next offset to consume.
+                                        var nextOffset = lastSuccessfulOffset + 1;
+                                        commitOffsets.Add(new TopicPartitionOffset(partition, new Offset(nextOffset)));
+                                        _lastCommittedOffsets[partition] = lastSuccessfulOffset;
+
+                                        _logger.LogInformation(
+                                            "// {Class} // Partition {Partition} prepared commit next offset {NextOffset} (last successful {LastOffset})",
+                                            GetType().Name,
+                                            partition.Partition.Value,
+                                            nextOffset,
+                                            lastSuccessfulOffset);
+                                    }
+                                    else
+                                    {
+                                        _logger.LogDebug(
+                                            "// {Class} // Partition {Partition} no new progress (last successful {LastOffset}, previously committed {PrevCommitted})",
+                                            GetType().Name,
+                                            partition.Partition.Value,
+                                            lastSuccessfulOffset,
+                                            previousCommitted);
+                                    }
+                                }
+                                else
+                                {
+                                    _logger.LogWarning(
+                                        "// {Class} // Partition {Partition} no messages processed successfully in this batch",
+                                        GetType().Name,
+                                        partition.Partition.Value);
+                                }
+                            }
+                            finally
+                            {
+                                _processingConcurrencySemaphore.Release();
+                                _inFlightTasks.TryRemove(taskId, out _);
+                            }
+                        },
+                        cancellationToken);
+
+                    _inFlightTasks[taskId] = task;
+                    partitionTasks.Add(task);
+                }
+
+                await Task.WhenAll(partitionTasks);
+
+                if (!commitOffsets.IsEmpty)
+                {
+                    _logger.LogInformation("// {Class} // Committing {Count} partition offsets", GetType().Name, commitOffsets.Count);
+                    SafeCommit(commitOffsets);
+                }
+                else
+                {
+                    _logger.LogWarning("// {Class} // No offsets eligible for commit in this batch (size {BatchSize})", GetType().Name, messageBatch.Length);
+                }
+
+                _logger.LogInformation(
+                    "// KafkaConsumerBase // ConsumeMessageBatch // Batch completed topic {Topic}. Messages {BatchSize} in {Duration:F0}ms, committed {CommittedCount} partition offsets",
+                    _topicName,
+                    messageBatch.Length,
+                    (DateTime.UtcNow - processingStartTime).TotalMilliseconds,
+                    commitOffsets.Count);
             }
             catch (OperationCanceledException)
             {
@@ -229,8 +513,8 @@ public abstract class KafkaConsumerBase : BackgroundService
             .GroupBy(o => o.TopicPartition)
             .Select(g =>
             {
-                var max = g.Select(x => x.Offset.Value).Max();
-                return new TopicPartitionOffset(g.Key, new Offset(max));
+                var maxNext = g.Select(x => x.Offset.Value).Max();
+                return new TopicPartitionOffset(g.Key, new Offset(maxNext));
             })
             .ToList();
 
@@ -239,7 +523,10 @@ public abstract class KafkaConsumerBase : BackgroundService
             return;
         }
 
-        _logger.LogInformation("// {Class} // Committing normalized offsets per partition: {Offsets}", GetType().Name, string.Join(',', normalized.Select(o => $"{o.Topic}:{o.Partition}-{o.Offset}")));
+        _logger.LogInformation(
+            "// {Class} // Committing offsets: {Offsets}",
+            GetType().Name,
+            string.Join(',', normalized.Select(o => $"{o.Topic}:{o.Partition}-{o.Offset.Value}")));
 
         try
         {
@@ -249,11 +536,11 @@ public abstract class KafkaConsumerBase : BackgroundService
         }
         catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
         {
-            _logger.LogWarning(ex, "// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+            _logger.LogWarning(ex, "// {Class} // Commit skipped transient state: {Reason}", GetType().Name, ex.Error.Reason);
         }
         catch (KafkaException ex)
         {
-            _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
+            _logger.LogError(ex, "// {Class} // Commit failed", GetType().Name);
         }
     }
 
@@ -271,7 +558,7 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         var consumerConfig = new ConsumerConfig(config.ConsumerConfig)
         {
-            FetchWaitMaxMs = 25,
+            FetchWaitMaxMs = 50,
             QueuedMinMessages = 1000,
             SessionTimeoutMs = 30000,
             EnableAutoCommit = false,
@@ -322,7 +609,7 @@ public abstract class KafkaConsumerBase : BackgroundService
             })
             .SetStatisticsHandler((_, json) =>
             {
-                _logger.LogDebug("// KafkaProducer // Stats: {StatsJson}", json);
+                _logger.LogDebug("// KafkaConsumer // Stats: {StatsJson}", json);
             })
             .SetPartitionsRevokedHandler((_, partitions) =>
             {
@@ -362,17 +649,18 @@ public abstract class KafkaConsumerBase : BackgroundService
 
             try
             {
-                var result = _consumer.Consume(remaining);
-                if (result is null)
+                var consumeResult = _consumer.Consume(remaining);
+                if (consumeResult is null)
                 {
                     break;
                 }
 
-                polledMessages.Add(result);
+                polledMessages.Add(consumeResult);
             }
             catch (ConsumeException ex)
             {
                 _logger.LogWarning(ex, "// {Class} // Consume exception during batch polling", GetType().Name);
+
                 break;
             }
         }

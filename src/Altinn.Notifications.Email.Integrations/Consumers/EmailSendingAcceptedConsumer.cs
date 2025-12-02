@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace Altinn.Notifications.Email.Integrations.Consumers;
 
 /// <summary>
-/// Kafka consumer class for handling the email queue.
+/// Kafka consumer class for handling the email queue using batch processing.
 /// </summary>
 public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
 {
@@ -40,28 +40,90 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
     /// <inheritdoc/>
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        return ConsumeMessage(ConsumeOperation, RetryOperation, stoppingToken);
+        return ConsumeMessageBatch(ConsumeOperationBatch, RetryOperation, stoppingToken);
     }
 
-    private async Task ConsumeOperation(string message)
+    private async Task ConsumeOperationBatch(IEnumerable<string> messages)
     {
-        bool succeeded = SendNotificationOperationIdentifier.TryParse(message, out SendNotificationOperationIdentifier operationIdentifier);
-
-        if (!succeeded)
+        var messageList = messages.ToList();
+        if (messageList.Count == 0)
         {
-            _logger.LogError("// EmailSendingAcceptedConsumer // ConsumeOperation // Deserialization of message failed. {Message}", message);
-
             return;
         }
 
-        int diff = (int)(_dateTime.UtcNow() - operationIdentifier.LastStatusCheck).TotalMilliseconds;
+        _logger.LogInformation(
+            "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // Processing batch of {Count} messages",
+            messageList.Count);
+
+        // Parse all messages first to validate them
+        var operationIdentifiers = new List<SendNotificationOperationIdentifier>();
+        var invalidMessages = new List<string>();
+
+        foreach (var message in messageList)
+        {
+            if (SendNotificationOperationIdentifier.TryParse(message, out SendNotificationOperationIdentifier operationIdentifier))
+            {
+                operationIdentifiers.Add(operationIdentifier);
+            }
+            else
+            {
+                _logger.LogError(
+                    "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // Deserialization of message failed. {Message}",
+                    message);
+                invalidMessages.Add(message);
+            }
+        }
+
+        if (operationIdentifiers.Count == 0)
+        {
+            _logger.LogWarning(
+                "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // No valid messages in batch of {Count}",
+                messageList.Count);
+            return;
+        }
+
+        // Apply delay once per batch based on the first valid operation
+        var firstOperation = operationIdentifiers[0];
+        int diff = (int)(_dateTime.UtcNow() - firstOperation.LastStatusCheck).TotalMilliseconds;
 
         if (diff > 0 && diff < _processingDelay)
         {
-            await Task.Delay(_processingDelay - diff);
+            var delayTime = _processingDelay - diff;
+            _logger.LogInformation(
+                "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // Applying batch delay of {DelayMs}ms for {Count} messages",
+                delayTime,
+                operationIdentifiers.Count);
+
+            await Task.Delay(delayTime);
         }
 
-        await _statusService.UpdateSendStatus(operationIdentifier);
+        // Process all valid operations
+        var processingTasks = operationIdentifiers.Select(async operationIdentifier =>
+        {
+            try
+            {
+                await _statusService.UpdateSendStatus(operationIdentifier);
+
+                _logger.LogDebug(
+                    "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // Processed operation {OperationId}",
+                    operationIdentifier.OperationId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // Failed to process operation {OperationId}",
+                    operationIdentifier.OperationId);
+                throw;
+            }
+        });
+
+        await Task.WhenAll(processingTasks);
+
+        _logger.LogInformation(
+            "// EmailSendingAcceptedConsumer // ConsumeOperationBatch // Successfully processed {ValidCount} operations, {InvalidCount} invalid messages",
+            operationIdentifiers.Count,
+            invalidMessages.Count);
     }
 
     private async Task RetryOperation(string message)

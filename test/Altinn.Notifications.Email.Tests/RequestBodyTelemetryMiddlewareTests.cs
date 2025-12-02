@@ -196,8 +196,15 @@ public class RequestBodyTelemetryMiddlewareTests
         }
     }
 
-    [Fact]
-    public async Task InvokeAsync_ParseObjectDeliveryReport_InvalidEmailAddress_DoesNotMaskRecipient()
+    [Theory]
+    [InlineData("invalid-email-address", "invalid-email-address", "Invalid email without @ symbol")]
+    [InlineData("ab@example.com", "***@example.com", "Email with 2-character local part")]
+    [InlineData("x@example.com", "***@example.com", "Email with 1-character local part")]
+    [InlineData("a@example.com", "***@example.com", "Email with single character local part")]
+    public async Task InvokeAsync_ParseObjectDeliveryReport_SpecialEmailCases_HandlesCorrectly(
+        string recipientEmail,
+        string expectedMaskedEmail,
+        string _)
     {
         // Arrange
         using var listener = new ActivityListener
@@ -216,9 +223,9 @@ public class RequestBodyTelemetryMiddlewareTests
                 next: (innerHttpContext) => Task.CompletedTask,
                 emailDeliveryReportSettings: options);
 
-            // Event with invalid email address (missing domain)
-            const string deliveryEventWithInvalidEmail = "[{\"id\":\"e000f000-0000-0000-0000-000000000000\",\"topic\":\"/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/microsoft.communication/communicationservices/{acs-resource-name}\",\"subject\":\"sender/sender@mydomain.com/message/f000e000-0000-0000-0000-000000000000\",\"eventType\":\"Microsoft.Communication.EmailDeliveryReportReceived\",\"data\":{\"sender\":\"sender@mydomain.com\",\"recipient\":\"invalid-email-address\",\"messageId\":\"f000e000-0000-0000-0000-000000000000\",\"status\":\"Delivered\",\"deliveryAttemptTimeStamp\":\"2025-11-11T13:58:00.0000000Z\",\"deliveryStatusDetails\":{\"statusMessage\":\"No error.\"}},\"dataVersion\":\"1.0\",\"metadataVersion\":\"1\",\"eventTime\":\"2025-11-11T13:58:00Z\"}]";
-            var context = CreateHttpContext("POST", deliveryEventWithInvalidEmail);
+            // Event with the test recipient email address
+            string deliveryEventWithSpecialEmail = $"[{{\"id\":\"e000f000-0000-0000-0000-000000000000\",\"topic\":\"/subscriptions/{{subscription-id}}/resourceGroups/{{resource-group}}/providers/microsoft.communication/communicationservices/{{acs-resource-name}}\",\"subject\":\"sender/sender@mydomain.com/message/f000e000-0000-0000-0000-000000000000\",\"eventType\":\"Microsoft.Communication.EmailDeliveryReportReceived\",\"data\":{{\"sender\":\"sender@mydomain.com\",\"recipient\":\"{recipientEmail}\",\"messageId\":\"f000e000-0000-0000-0000-000000000000\",\"status\":\"Delivered\",\"deliveryAttemptTimeStamp\":\"2025-11-11T13:58:00.0000000Z\",\"deliveryStatusDetails\":{{\"statusMessage\":\"No error.\"}}}},\"dataVersion\":\"1.0\",\"metadataVersion\":\"1\",\"eventTime\":\"2025-11-11T13:58:00Z\"}}]";
+            var context = CreateHttpContext("POST", deliveryEventWithSpecialEmail);
 
             // Act
             await middleware.InvokeAsync(context);
@@ -226,9 +233,10 @@ public class RequestBodyTelemetryMiddlewareTests
             // Assert
             Assert.NotNull(activity);
             var deliveryReportsTag = activity.Tags.FirstOrDefault(t => t.Key == "DeliveryReports");
+            Assert.NotEqual(default, deliveryReportsTag);
 
-            // Verify the invalid email address is preserved as-is (not masked)
-            Assert.Contains("invalid-email-address", deliveryReportsTag.Value);
+            // Verify the email is handled according to expectations (masked or preserved)
+            Assert.Contains(expectedMaskedEmail, deliveryReportsTag.Value);
             Assert.Contains("f000e000-0000-0000-0000-000000000000", deliveryReportsTag.Value);
         }
     }

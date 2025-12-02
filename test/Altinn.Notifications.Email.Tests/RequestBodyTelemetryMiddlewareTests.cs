@@ -73,6 +73,28 @@ public class RequestBodyTelemetryMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_CallsNextMiddleware_WhenActivityIsNull()
+    {
+        // Arrange
+        // activity is implicitly null here since we are not creating one for listening
+        bool nextMiddlewareCalled = false;
+        var middleware = new RequestBodyTelemetryMiddleware(
+            next: (innerHttpContext) =>
+            {
+                nextMiddlewareCalled = true;
+                return Task.CompletedTask;
+            },
+            emailDeliveryReportSettings: _options);
+        var context = CreateHttpContext("POST", _realWorldDeliveryEvent);
+
+        // Act
+        await middleware.InvokeAsync(context);
+
+        // Assert
+        Assert.True(nextMiddlewareCalled);
+    }
+
+    [Fact]
     public async Task InvokeAsync_PreservesRequestBodyForNextMiddleware()
     {
         // Arrange

@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 
@@ -20,7 +19,6 @@ namespace Altinn.Notifications.Email.Telemetry;
 /// </summary>
 /// <param name="next">The next middleware delegate in the request pipeline.</param>
 /// <param name="emailDeliveryReportSettings">Configuration settings for email delivery reports.</param>
-[ExcludeFromCodeCoverage]
 public class RequestBodyTelemetryMiddleware(
     RequestDelegate next,
     IOptions<EmailDeliveryReportSettings> emailDeliveryReportSettings)
@@ -81,6 +79,32 @@ public class RequestBodyTelemetryMiddleware(
         await _next(context);
     }
 
+    /// <summary>
+    /// Masks an email address by keeping only the first two characters of the local part
+    /// and the entire domain, replacing the rest with asterisks.
+    /// </summary>
+    /// <param name="email">The email address to mask.</param>
+    /// <returns>The masked email address, or the original string if it's not a valid email format.</returns>
+    private static string MaskEmailAddress(string email)
+    {
+        var atIndex = email.IndexOf('@');
+        if (atIndex <= 0 || atIndex == email.Length - 1)
+        {
+            return email; // Not a valid email format, return as-is
+        }
+
+        var localPart = email[..atIndex];
+        var domain = email[(atIndex + 1)..];
+
+        if (localPart.Length <= 2)
+        {
+            return $"***@{domain}";
+        }
+
+        var maskedLocalPart = localPart[..2] + "***";
+        return $"{maskedLocalPart}@{domain}";
+    }
+
     private static void ApplyDeliveryReportsToCustomDimensions(List<AcsEmailDeliveryReportReceivedEventData> deliveryReports, Activity activity)
     {
         if (deliveryReports.Count == 0)
@@ -88,8 +112,20 @@ public class RequestBodyTelemetryMiddleware(
             return;
         }
 
-        // Add delivery reports as a custom tag - will appear in Application Insights customDimensions
-        activity.SetTag("DeliveryReports", JsonSerializer.Serialize(deliveryReports));
+        // Create masked versions for telemetry without mutating original objects
+        var maskedReports = deliveryReports.Select(report => new
+        {
+            report.MessageId,
+            report.InternetMessageId,
+            Recipient = !string.IsNullOrWhiteSpace(report.Recipient) ? MaskEmailAddress(report.Recipient) : report.Recipient,
+            Sender = !string.IsNullOrWhiteSpace(report.Sender) ? MaskEmailAddress(report.Sender) : report.Sender,
+            Status = report.Status?.ToString(),
+            DetailsStatusMessage = report.DeliveryStatusDetails?.StatusMessage,
+            DetailsRecipientMailServerHostName = report.DeliveryStatusDetails?.RecipientMailServerHostName,
+            report.DeliveryAttemptTimestamp
+        }).ToList();
+
+        activity.SetTag("DeliveryReports", JsonSerializer.Serialize(maskedReports));
     }
 
     private static void ApplyOperationResultsToCustomDimensions(List<SendOperationResult> sendOperationResults, Activity activity)

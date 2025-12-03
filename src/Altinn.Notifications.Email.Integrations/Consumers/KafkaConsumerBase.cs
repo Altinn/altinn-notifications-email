@@ -21,9 +21,9 @@ public abstract class KafkaConsumerBase : BackgroundService
     private readonly ILogger<KafkaConsumerBase> _logger;
     private readonly IConsumer<string, string> _consumer;
 
-    private const int _maxMessagesCountInBatch = 250;
+    private const int _maxMessagesCountInBatch = 50;
+    private const int _maxConcurrentProcessingTasks = 50;
     private const int _messagesBatchPollTimeoutInMs = 100;
-    private const int _maxConcurrentProcessingTasks = 250;
 
     private readonly SemaphoreSlim _processingConcurrencySemaphore;
     private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
@@ -310,15 +310,15 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         var consumerConfig = new ConsumerConfig(config.ConsumerConfig)
         {
-            FetchWaitMaxMs = 50,
-            QueuedMinMessages = 1000,
+            FetchWaitMaxMs = 100,
+            QueuedMinMessages = 50,
             SessionTimeoutMs = 30000,
             EnableAutoCommit = false,
-            FetchMinBytes = 64 * 1024,
-            HeartbeatIntervalMs = 5000,
+            FetchMinBytes = 512 * 1024,
             MaxPollIntervalMs = 300000,
+            HeartbeatIntervalMs = 5000,
             EnableAutoOffsetStore = false,
-            QueuedMaxMessagesKbytes = 32768,
+            QueuedMaxMessagesKbytes = 16384,
             MaxPartitionFetchBytes = 4 * 1024 * 1024,
             SocketReceiveBufferBytes = 2 * 1024 * 1024,
             AutoOffsetReset = AutoOffsetReset.Earliest,

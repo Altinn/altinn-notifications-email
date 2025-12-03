@@ -1,6 +1,8 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Security.Cryptography;
+using System.Text;
 
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
@@ -77,7 +79,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             _consumer.Subscribe(_topicName);
 
-            _logger.LogInformation("// {Class} // Subscribed to topic {Topic}", GetType().Name, _topicName);
+            _logger.LogInformation("// {Class} // Subscribed to topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
 
             return base.StartAsync(cancellationToken);
         }
@@ -161,6 +163,44 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     _batchLatencyMs.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _topicName));
                 }
             }
+        }
+
+        /// <summary>
+        /// Computes a deterministic truncated SHA-256 hexadecimal fingerprint for a Kafka topic name.
+        /// The fingerprint is intended for log correlation and diagnostics without exposing the raw topic identifier.
+        /// </summary>
+        /// <param name="topicName">
+        /// The original Kafka topic name to fingerprint. If <c>null</c>, empty, or whitespace,
+        /// the literal string <c>"EMPTY"</c> is returned.
+        /// </param>
+        /// <returns>
+        /// A 16 character lowercase hexadecimal string representing the first 8 bytes of the SHA-256 hash
+        /// of <paramref name="topicName"/>, or <c>"EMPTY"</c> if the input is blank.
+        /// </returns>
+        private static string ComputeTopicFingerprint(string topicName)
+        {
+            if (string.IsNullOrWhiteSpace(topicName))
+            {
+                return "EMPTY";
+            }
+
+            ReadOnlySpan<byte> topicNameBytes = Encoding.UTF8.GetBytes(topicName);
+
+            Span<byte> digest = stackalloc byte[32];
+            SHA256.HashData(topicNameBytes, digest);
+
+            // First 8 bytes -> 16 hex chars (truncated fingerprint)
+            Span<char> fingerprintBuffer = stackalloc char[16];
+            const string hexAlphabet = "0123456789abcdef";
+
+            for (int i = 0; i < 8; i++)
+            {
+                byte byteValue = digest[i];
+                fingerprintBuffer[i * 2] = hexAlphabet[byteValue >> 4];
+                fingerprintBuffer[(i * 2) + 1] = hexAlphabet[byteValue & 0x0F];
+            }
+
+            return new string(fingerprintBuffer);
         }
 
         /// <summary>
@@ -333,6 +373,105 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
+        /// Finalizes batch processing by computing contiguous commit candidates from successful message processing results and safely committing them to Kafka.
+        /// </summary>
+        /// <param name="launchedMessages">
+        /// The complete list of messages that were launched for processing in this batch, in the order they were launched.
+        /// </param>
+        /// <param name="successfulNextOffsets">
+        /// A thread-safe collection containing the "next offset" (original offset + 1) for each message that was
+        /// successfully processed (including successful retries). These represent the offsets that are safe to commit to Kafka.
+        /// </param>
+        /// <returns>
+        /// A task that completes when all commit operations and logging have finished.
+        /// </returns>
+        private async Task AwaitLaunchedTasksAndCommit(List<ConsumeResult<string, string>> launchedMessages, ConcurrentBag<TopicPartitionOffset> successfulNextOffsets)
+        {
+            if (!successfulNextOffsets.IsEmpty)
+            {
+                var commitCandidates = ComputeContiguousCommitOffsets([.. launchedMessages], successfulNextOffsets);
+
+                if (commitCandidates.Count != 0)
+                {
+                    SafeCommit(commitCandidates);
+                }
+                else
+                {
+                    _logger.LogWarning("// {Class} // No contiguous offsets eligible for commit in launched set of {Launched}", GetType().Name, launchedMessages.Count);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("// {Class} // No messages successfully processed in launched set of {Launched}", GetType().Name, launchedMessages.Count);
+            }
+
+            await Task.Yield();
+        }
+
+        /// <summary>
+        /// Computes per-partition commit offsets by determining the largest contiguous
+        /// sequence of successfully processed  messages from the earliest offset in each partition within the launched batch.
+        /// </summary>
+        /// <param name="launchedBatch">
+        /// An array of Kafka consume results representing the subset of messages that were actually launched for processing in this batch.
+        /// </param>
+        /// <param name="successfulOffsets">
+        /// A collection of TopicPartitionOffset values representing the "next offset" (original message offset + 1) for 
+        /// each message that completed processing successfully, including those that succeeded after retry attempts.
+        /// </param>
+        /// <returns>
+        /// A list of TopicPartitionOffset values that are safe to commit to Kafka, representing the highest contiguous
+        /// offset that can be committed for each partition without creating gaps. Returns an empty list if no contiguous
+        /// sequences can be established (e.g., if the first message in any partition failed).
+        /// </returns>
+        private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(ConsumeResult<string, string>[] launchedBatch, IEnumerable<TopicPartitionOffset> successfulOffsets)
+        {
+            var commitOffsets = new List<TopicPartitionOffset>();
+
+            // For each partition, get the ordered list of launched offsets.
+            var batchByTopicPartition = launchedBatch.GroupBy(e => e.TopicPartition).ToDictionary(e => e.Key, e => e.Select(e => e.Offset.Value).OrderBy(x => x).ToList());
+
+            // Map successes by TopicPartition to a set of next-offset values (since commits use next-offset)
+            var successesByTopicPartition = successfulOffsets.GroupBy(e => e.TopicPartition).ToDictionary(e => e.Key, e => new HashSet<long>(e.Select(s => s.Offset.Value)));
+
+            foreach (var kvp in batchByTopicPartition)
+            {
+                var topicPartition = kvp.Key;
+                var orderedOffsets = kvp.Value;
+
+                if (!successesByTopicPartition.TryGetValue(topicPartition, out var successSet) || successSet.Count == 0)
+                {
+                    continue;
+                }
+
+                long? lastContiguousNext = null;
+
+                // Find the largest prefix of the ordered launched offsets where each offset's (offset + 1) is in successSet.
+                foreach (var offset in orderedOffsets)
+                {
+                    var nextPosition = offset + 1;
+
+                    if (successSet.Contains(nextPosition))
+                    {
+                        lastContiguousNext = nextPosition;
+                    }
+                    else
+                    {
+                        // Gap encountered — we cannot commit past this point.
+                        break;
+                    }
+                }
+
+                if (lastContiguousNext.HasValue)
+                {
+                    commitOffsets.Add(new TopicPartitionOffset(topicPartition, new Offset(lastContiguousNext.Value)));
+                }
+            }
+
+            return commitOffsets;
+        }
+
+        /// <summary>
         /// Launches processing tasks for a batch of messages while honoring bounded concurrency and fail-fast semantics.
         /// </summary>
         /// <param name="messageBatch">The batch of Kafka messages to process, in the order they were consumed from the topic.</param>
@@ -441,105 +580,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
 
             return new BatchProcessingResult(launchedMessages, successfulNextOffsets);
-        }
-
-        /// <summary>
-        /// Finalizes batch processing by computing contiguous commit candidates from successful message processing results and safely committing them to Kafka.
-        /// </summary>
-        /// <param name="launchedMessages">
-        /// The complete list of messages that were launched for processing in this batch, in the order they were launched.
-        /// </param>
-        /// <param name="successfulNextOffsets">
-        /// A thread-safe collection containing the "next offset" (original offset + 1) for each message that was
-        /// successfully processed (including successful retries). These represent the offsets that are safe to commit to Kafka.
-        /// </param>
-        /// <returns>
-        /// A task that completes when all commit operations and logging have finished.
-        /// </returns>
-        private async Task AwaitLaunchedTasksAndCommit(List<ConsumeResult<string, string>> launchedMessages, ConcurrentBag<TopicPartitionOffset> successfulNextOffsets)
-        {
-            if (!successfulNextOffsets.IsEmpty)
-            {
-                var commitCandidates = ComputeContiguousCommitOffsets([.. launchedMessages], successfulNextOffsets);
-
-                if (commitCandidates.Count != 0)
-                {
-                    SafeCommit(commitCandidates);
-                }
-                else
-                {
-                    _logger.LogWarning("// {Class} // No contiguous offsets eligible for commit in launched set of {Launched}", GetType().Name, launchedMessages.Count);
-                }
-            }
-            else
-            {
-                _logger.LogWarning("// {Class} // No messages successfully processed in launched set of {Launched}", GetType().Name, launchedMessages.Count);
-            }
-
-            await Task.Yield();
-        }
-
-        /// <summary>
-        /// Computes per-partition commit offsets by determining the largest contiguous
-        /// sequence of successfully processed  messages from the earliest offset in each partition within the launched batch.
-        /// </summary>
-        /// <param name="launchedBatch">
-        /// An array of Kafka consume results representing the subset of messages that were actually launched for processing in this batch.
-        /// </param>
-        /// <param name="successfulOffsets">
-        /// A collection of TopicPartitionOffset values representing the "next offset" (original message offset + 1) for 
-        /// each message that completed processing successfully, including those that succeeded after retry attempts.
-        /// </param>
-        /// <returns>
-        /// A list of TopicPartitionOffset values that are safe to commit to Kafka, representing the highest contiguous
-        /// offset that can be committed for each partition without creating gaps. Returns an empty list if no contiguous
-        /// sequences can be established (e.g., if the first message in any partition failed).
-        /// </returns>
-        private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(ConsumeResult<string, string>[] launchedBatch, IEnumerable<TopicPartitionOffset> successfulOffsets)
-        {
-            var commitOffsets = new List<TopicPartitionOffset>();
-
-            // For each partition, get the ordered list of launched offsets.
-            var batchByTopicPartition = launchedBatch.GroupBy(e => e.TopicPartition).ToDictionary(e => e.Key, e => e.Select(e => e.Offset.Value).OrderBy(x => x).ToList());
-
-            // Map successes by TopicPartition to a set of next-offset values (since commits use next-offset)
-            var successesByTopicPartition = successfulOffsets.GroupBy(e => e.TopicPartition).ToDictionary(e => e.Key, e => new HashSet<long>(e.Select(s => s.Offset.Value)));
-
-            foreach (var kvp in batchByTopicPartition)
-            {
-                var topicPartition = kvp.Key;
-                var orderedOffsets = kvp.Value;
-
-                if (!successesByTopicPartition.TryGetValue(topicPartition, out var successSet) || successSet.Count == 0)
-                {
-                    continue;
-                }
-
-                long? lastContiguousNext = null;
-
-                // Find the largest prefix of the ordered launched offsets where each offset's (offset + 1) is in successSet.
-                foreach (var offset in orderedOffsets)
-                {
-                    var nextPosition = offset + 1;
-
-                    if (successSet.Contains(nextPosition))
-                    {
-                        lastContiguousNext = nextPosition;
-                    }
-                    else
-                    {
-                        // Gap encountered — we cannot commit past this point.
-                        break;
-                    }
-                }
-
-                if (lastContiguousNext.HasValue)
-                {
-                    commitOffsets.Add(new TopicPartitionOffset(topicPartition, new Offset(lastContiguousNext.Value)));
-                }
-            }
-
-            return commitOffsets;
         }
     }
 }

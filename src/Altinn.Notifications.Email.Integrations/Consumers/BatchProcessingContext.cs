@@ -1,0 +1,27 @@
+﻿using System.Collections.Concurrent;
+
+using Confluent.Kafka;
+
+namespace Altinn.Notifications.Email.Integrations.Consumers;
+
+/// <summary>
+/// Encapsulates the state and results of a message batch processing operation for Kafka consumer.
+/// </summary>
+public sealed record BatchProcessingContext
+{
+    /// <summary>
+    /// Consume results obtained during the poll phase for this batch.
+    /// This may include items that were not launched, depending on failure/cancellation conditions.
+    /// </summary>
+    public IList<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
+
+    /// <summary>
+    /// Thread-safe collection of per-message next offsets (original offset + 1) for successfully processed consume results.
+    /// </summary>
+    public ConcurrentBag<TopicPartitionOffset> SuccessfulNextOffsets { get; init; } = [];
+
+    /// <summary>
+    /// Consume results for tasks that were launched in this batch.
+    /// </summary>
+    public IList<ConsumeResult<string, string>> ConsumeResultsForLaunchedTasks { get; init; } = [];
+}

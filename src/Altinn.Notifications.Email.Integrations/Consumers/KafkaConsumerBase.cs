@@ -1,4 +1,6 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 
 using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
@@ -28,6 +30,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
         private readonly SemaphoreSlim _processingConcurrencySemaphore;
         private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
+
+        private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
+        private static readonly Counter<int> _failedCounter = _meter.CreateCounter<int>("kafka.consumer.failed");
+        private static readonly Counter<int> _retriedCounter = _meter.CreateCounter<int>("kafka.consumer.retried");
+        private static readonly Counter<int> _consumedCounter = _meter.CreateCounter<int>("kafka.consumer.consumed");
+        private static readonly Counter<int> _committedCounter = _meter.CreateCounter<int>("kafka.consumer.committed");
+        private static readonly Counter<int> _processedCounter = _meter.CreateCounter<int>("kafka.consumer.processed");
+        private static readonly Histogram<double> _batchLatencyMs = _meter.CreateHistogram<double>("kafka.consumer.batch.latency.ms");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
@@ -104,13 +114,15 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <summary>
         /// Consumes messages from the Kafka topic in batches, launching up to a bounded number of concurrent processors.
         /// </summary>
-        /// <param name="processMessageFunc">Function to process a single message.</param>
-        /// <param name="retryMessageFunc">Function to retry a message if processing fails.</param>
-        /// <param name="cancellationToken">Cancellation token to observe for shutdown.</param>
+        /// <param name="processMessageFunc">A function that processes a single message value.</param>
+        /// <param name="retryMessageFunc">A function that retries processing a single message value when the initial processing fails.</param>
+        /// <param name="cancellationToken">A cancellation token used to observe shutdown requests and coordinate graceful termination of processing tasks.</param>
         protected async Task ConsumeMessage(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
             {
+                var batchStopwatch = Stopwatch.StartNew();
+
                 try
                 {
                     var messageBatch = FetchMessageBatch(_maxMessagesPerBatch, _messagesBatchPollTimeoutMs, cancellationToken);
@@ -119,6 +131,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         await Task.Delay(10, cancellationToken);
                         continue;
                     }
+
+                    _consumedCounter.Add(messageBatch.Length, KeyValuePair.Create<string, object?>("topic", _topicName));
 
                     _logger.LogInformation(
                         "// {Class} // Polled {BatchSize} messages. Offsets {StartOffset}..{EndOffset}. In-flight tasks: {InFlight}",
@@ -140,53 +154,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 {
                     _logger.LogError(ex, "// {Class} // Unexpected error in batch processing loop", GetType().Name);
                 }
-            }
-        }
-
-        /// <summary>
-        /// Safely commits normalized offsets to Kafka with built-in resilience against transient consumer group states.
-        /// This method performs offset normalization by selecting the highest offset per partition, handles rebalancing
-        /// scenarios gracefully, and provides comprehensive logging for commit operations. The method is designed to
-        /// be fault-tolerant and will skip commits during unsafe states rather than failing the entire consumer operation.
-        /// </summary>
-        /// <param name="offsets">
-        /// A collection of TopicPartitionOffset values representing the offsets to commit to Kafka. These offsets
-        /// typically represent the "next offset" position (message offset + 1) for successfully processed messages.
-        /// The method will normalize multiple offsets for the same partition by keeping only the highest offset value.
-        /// Can be null or empty, in which case the method returns immediately without attempting any commit operations.
-        /// </param>
-        protected virtual void SafeCommit(IEnumerable<TopicPartitionOffset> offsets)
-        {
-            if (_isShutdownInitiated || offsets is null)
-            {
-                return;
-            }
-
-            var normalizedOffsets = offsets
-                .GroupBy(e => e.TopicPartition)
-                .Select(e =>
+                finally
                 {
-                    var maxOffset = e.Select(x => x.Offset.Value).Max();
-                    return new TopicPartitionOffset(e.Key, new Offset(maxOffset));
-                })
-                .ToList();
+                    batchStopwatch.Stop();
 
-            if (normalizedOffsets.Count == 0)
-            {
-                return;
-            }
-
-            try
-            {
-                _consumer.Commit(normalizedOffsets);
-            }
-            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
-            {
-                _logger.LogWarning(ex, "// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
-            }
-            catch (KafkaException ex)
-            {
-                _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
+                    _batchLatencyMs.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _topicName));
+                }
             }
         }
 
@@ -221,6 +194,55 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
+        /// Safely commits normalized offsets to Kafka with built-in resilience against transient consumer group states.
+        /// </summary>
+        /// <param name="offsets">
+        /// A collection the offsets to commit to Kafka.
+        /// </param>
+        private void SafeCommit(IEnumerable<TopicPartitionOffset> offsets)
+        {
+            if (offsets is null || _isShutdownInitiated)
+            {
+                return;
+            }
+
+            var normalizedOffsets = offsets
+                .GroupBy(e => e.TopicPartition)
+                .Select(e =>
+                {
+                    var maxOffset = e.Select(x => x.Offset.Value).Max();
+                    return new TopicPartitionOffset(e.Key, new Offset(maxOffset));
+                })
+                .ToList();
+
+            if (normalizedOffsets.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _consumer.Commit(normalizedOffsets);
+
+                _committedCounter.Add(normalizedOffsets.Count, KeyValuePair.Create<string, object?>("topic", _topicName));
+
+                _logger.LogInformation(
+                    "// {Class} // Committed {Count} partition(s). Max next-offsets: {Offsets}",
+                    GetType().Name,
+                    normalizedOffsets.Count,
+                    string.Join(',', normalizedOffsets.Select(o => $"{o.Topic}-{o.Partition}:{o.Offset.Value}")));
+            }
+            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+            {
+                _logger.LogWarning(ex, "// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+            }
+            catch (KafkaException ex)
+            {
+                _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
+            }
+        }
+
+        /// <summary>
         /// Creates and configures a Kafka consumer instance with error, statistics, and partition assignment handlers.
         /// </summary>
         /// <param name="consumerConfig">The <see cref="ConsumerConfig"/> used to build the consumer.</param>
@@ -245,7 +267,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .SetStatisticsHandler((_, json) =>
                 {
-                    _logger.LogDebug("// KafkaProducer // Stats: {StatsJson}", json);
+                    _logger.LogDebug("// KafkaConsumerBase // Stats: {StatsJson}", json);
                 })
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
@@ -312,18 +334,15 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
         /// <summary>
         /// Launches processing tasks for a batch of messages while honoring bounded concurrency and fail-fast semantics.
-        /// This method processes messages concurrently up to the configured limit, but stops launching new tasks
-        /// immediately after the first failure (including retry failures). Already-started tasks are allowed to complete.
-        /// Returns the launched messages, the set of successful "next offsets" (offset + 1), and an interlocked failure flag (0/1).
         /// </summary>
         /// <param name="messageBatch">The batch of Kafka messages to process, in the order they were consumed from the topic.</param>
-        /// <param name="processMessageFunc">A function that processes a single message value. Should be idempotent and handle business logic exceptions gracefully.</param>
-        /// <param name="retryMessageFunc">A function that retries processing a single message value when the initial processing fails. Called once per failed message.</param>
+        /// <param name="processMessageFunc">A function that processes a single message value.</param>
+        /// <param name="retryMessageFunc">A function that retries processing a single message value when the initial processing fails.</param>
         /// <param name="cancellationToken">A cancellation token used to observe shutdown requests and coordinate graceful termination of processing tasks.</param>
         /// <returns>
-        /// A tuple containing:
-        /// - LaunchedMessages: The subset of messages from the batch that were actually launched for processing (may be less than the full batch if fail-fast was triggered).
-        /// - SuccessfulNextOffsets: A thread-safe collection of TopicPartitionOffset values representing the next offset to commit for successfully processed messages (original offset + 1).
+        /// A <see cref="BatchProcessingResult"/> containing:
+        /// - <see cref="BatchProcessingResult.LaunchedMessages"/>: The subset of messages that were launched for processing (may be less than the full batch if fail-fast was triggered).
+        /// - <see cref="BatchProcessingResult.SuccessfulNextOffsets"/>: A thread-safe collection of <see cref="TopicPartitionOffset"/> values representing the next offset to commit for successfully processed messages (original offset + 1).
         /// </returns>
         private async Task<BatchProcessingResult> LaunchBatchProcessing(ConsumeResult<string, string>[] messageBatch, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
@@ -343,13 +362,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
                 launchedMessages.Add(message);
-                var processingTaskId = Guid.NewGuid();
+                var processingTaskGuid = Guid.NewGuid();
 
-                _logger.LogInformation("// {Class} // Start processing message at offset {Offset}", GetType().Name, message.Offset);
-
-                // Capture local references for the task closure
                 var capturedMessage = message;
-                var capturedProcessingTaskIdId = processingTaskId;
+                var capturedProcessingTaskIdId = processingTaskGuid;
 
                 var processingTask = Task.Run(
                     async () =>
@@ -364,6 +380,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                             await processMessageFunc(capturedMessage.Message.Value).ConfigureAwait(false);
 
                             successfulNextOffsets.Add(new TopicPartitionOffset(capturedMessage.TopicPartition, capturedMessage.Offset + 1));
+
+                            _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
                         }
                         catch (OperationCanceledException)
                         {
@@ -373,15 +391,23 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         {
                             _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, capturedMessage.Offset);
 
+                            _failedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+
                             try
                             {
                                 await retryMessageFunc(capturedMessage.Message.Value).ConfigureAwait(false);
 
                                 successfulNextOffsets.Add(new TopicPartitionOffset(capturedMessage.TopicPartition, capturedMessage.Offset + 1));
+
+                                _retriedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+                                _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
                             }
                             catch (Exception retryEx)
                             {
                                 _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, capturedMessage.Offset);
+
+                                _failedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+
                                 Interlocked.Exchange(ref failureDetectedFlag, 1);
                             }
                         }
@@ -393,7 +419,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                             }
                             catch (SemaphoreFullException ex)
                             {
-                                _logger.LogError(ex, "// {Class} // Semaphore already full when releasing for offset {Offset}", GetType().Name, capturedMessage.Offset);
+                                _logger.LogCritical(ex, "// {Class} // Semaphore already full when releasing for offset {Offset}", GetType().Name, capturedMessage.Offset);
                             }
 
                             _inFlightTasks.TryRemove(capturedProcessingTaskIdId, out _);
@@ -401,7 +427,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     },
                     cancellationToken);
 
-                _inFlightTasks[processingTaskId] = processingTask;
+                _inFlightTasks[processingTaskGuid] = processingTask;
                 launchedTasks.Add(processingTask);
             }
 
@@ -418,22 +444,17 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Finalizes batch processing by computing contiguous commit candidates from successful message processing results
-        /// and safely committing them to Kafka. This method ensures that only contiguous sequences of successfully processed
-        /// messages are committed, preventing gaps in the offset progression that could lead to message reprocessing.
-        /// Also provides comprehensive logging of processing results, commit decisions, and potential issues.
+        /// Finalizes batch processing by computing contiguous commit candidates from successful message processing results and safely committing them to Kafka.
         /// </summary>
         /// <param name="launchedMessages">
         /// The complete list of messages that were launched for processing in this batch, in the order they were launched.
-        /// Used to determine the contiguous sequence boundaries for safe offset commits.
         /// </param>
         /// <param name="successfulNextOffsets">
         /// A thread-safe collection containing the "next offset" (original offset + 1) for each message that was
         /// successfully processed (including successful retries). These represent the offsets that are safe to commit to Kafka.
         /// </param>
         /// <returns>
-        /// A task that completes when all commit operations and logging have finished. The task includes a yield
-        /// operation to allow tracing systems to flush their buffers.
+        /// A task that completes when all commit operations and logging have finished.
         /// </returns>
         private async Task AwaitLaunchedTasksAndCommit(List<ConsumeResult<string, string>> launchedMessages, ConcurrentBag<TopicPartitionOffset> successfulNextOffsets)
         {
@@ -459,20 +480,15 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Computes per-partition commit offsets by determining the largest contiguous sequence of successfully processed 
-        /// messages from the earliest offset in each partition within the launched batch. This algorithm ensures that
-        /// Kafka offset commits maintain strict ordering guarantees and prevent message gaps that could lead to 
-        /// reprocessing issues or message loss scenarios in distributed consumer groups.
+        /// Computes per-partition commit offsets by determining the largest contiguous
+        /// sequence of successfully processed  messages from the earliest offset in each partition within the launched batch.
         /// </summary>
         /// <param name="launchedBatch">
-        /// An array of Kafka consume results representing the subset of messages that were actually launched for processing 
-        /// in this batch. Messages may be in arbitrary order but represent consecutive offsets from the original poll operation.
-        /// This parameter is used to establish the ordering baseline and determine partition-specific commit boundaries.
+        /// An array of Kafka consume results representing the subset of messages that were actually launched for processing in this batch.
         /// </param>
         /// <param name="successfulOffsets">
         /// A collection of TopicPartitionOffset values representing the "next offset" (original message offset + 1) for 
         /// each message that completed processing successfully, including those that succeeded after retry attempts.
-        /// These offsets use Kafka's commit semantics where committing offset N means "I have processed up to and including offset N-1".
         /// </param>
         /// <returns>
         /// A list of TopicPartitionOffset values that are safe to commit to Kafka, representing the highest contiguous

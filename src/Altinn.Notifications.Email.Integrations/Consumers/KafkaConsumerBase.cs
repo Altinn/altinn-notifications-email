@@ -33,8 +33,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly int _progressiveCommitIntervalMs = 250;
         private readonly int _progressiveCommitMinNewSuccesses = 10;
 
+        private volatile IReadOnlyList<Task> _currentBatchTasks = [];
         private readonly SemaphoreSlim _processingConcurrencySemaphore;
-        private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _failedCounter = _meter.CreateCounter<int>("kafka.consumer.failed");
@@ -95,15 +95,23 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             _consumer.Unsubscribe();
 
-            foreach (var processingTask in _inFlightTasks.Values)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                try
-                {
-                    await processingTask.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-                }
-                catch (TimeoutException)
+                var pending = _currentBatchTasks.Where(e => !e.IsCompleted).ToArray() ?? [];
+                if (pending.Length == 0)
                 {
                     break;
+                }
+
+                try
+                {
+                    var waitAll = Task.WhenAll(pending);
+                    var completed = await Task.WhenAny(waitAll, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+
+                    if (completed == waitAll)
+                    {
+                        break;
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -448,12 +456,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             int lastObservedSuccessCount = 0;
             var commitStopwatch = Stopwatch.StartNew();
-            var tasksToAwait = _inFlightTasks.Values.ToArray();
+            var tasksToAwait = batchProcessingContext.LaunchedProcessingTasks;
             var lastCommittedByPartition = new Dictionary<TopicPartition, long>();
 
             while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
             {
-                if (tasksToAwait.All(e => e.IsCompleted))
+                if (tasksToAwait.Count > 0 && tasksToAwait.All(e => e.IsCompleted))
                 {
                     CommitContiguousAdvancingOffsets(batchProcessingContext, lastCommittedByPartition);
 
@@ -475,7 +483,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 try
                 {
-                    await Task.WhenAny(tasksToAwait.Append(Task.Delay(_progressiveCommitIntervalMs, cancellationToken)));
+                    if (tasksToAwait.Count > 0)
+                    {
+                        await Task.WhenAny(tasksToAwait.Append(Task.Delay(_progressiveCommitIntervalMs, cancellationToken)));
+                    }
+                    else
+                    {
+                        await Task.Delay(_progressiveCommitIntervalMs, cancellationToken);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -504,10 +519,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 return;
             }
 
-            var successes = batchContext.SuccessfulNextOffsets;
-            var launched = batchContext.ConsumeResultsForLaunchedTasks;
-
-            var commitCandidates = ComputeContiguousCommitOffsets([.. launched], successes);
+            var commitCandidates = ComputeContiguousCommitOffsets(batchContext);
             if (commitCandidates.Count == 0)
             {
                 return;
@@ -562,8 +574,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
-                var processingTaskIdId = Guid.NewGuid();
-
                 var processingTask = Task.Run(
                     async () =>
                     {
@@ -617,21 +627,21 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                             {
                                 _logger.LogWarning(ex, "// {Class} // Semaphore already full when releasing for offset {Offset}", GetType().Name, polledConsumeResult.Offset);
                             }
-
-                            _inFlightTasks.TryRemove(processingTaskIdId, out _);
                         }
                     },
                     cancellationToken);
 
                 processingTasks.Add(processingTask);
-                _inFlightTasks[processingTaskIdId] = processingTask;
                 consumeResultsForLaunchedTasks.Add(polledConsumeResult);
             }
+
+            _currentBatchTasks = processingTasks;
 
             await Task.WhenAll(processingTasks);
 
             return batchContext with
             {
+                LaunchedProcessingTasks = processingTasks,
                 SuccessfulNextOffsets = successfulNextOffsets,
                 ConsumeResultsForLaunchedTasks = consumeResultsForLaunchedTasks
             };

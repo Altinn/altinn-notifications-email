@@ -8,7 +8,6 @@ using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 
 using Confluent.Kafka;
-using Confluent.Kafka.Extensions.Diagnostics;
 
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -355,7 +354,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 try
                 {
-                    var result = _consumer.ConsumeWithInstrumentation(remainingTimeSpan);
+                    var result = _consumer.Consume(remainingTimeSpan);
                     if (result is null)
                     {
                         break;

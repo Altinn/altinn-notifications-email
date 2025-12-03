@@ -19,11 +19,7 @@ public class RequestBodyTelemetryMiddlewareTests
     public async Task InvokeAsync_ParseObjectSendOperationResults_AddsSendOperationResultsTag()
     {
         // Arrange
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = _ => true,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
-        };
+        using var listener = CreateListener();
         ActivitySource.AddActivityListener(listener);
 
         var (activitySource, activity) = CreateActivity();
@@ -44,7 +40,7 @@ public class RequestBodyTelemetryMiddlewareTests
             var sendOperationResultsTag = activity.Tags.FirstOrDefault(t => t.Key == "SendOperationResults");
             Assert.NotEqual(default, sendOperationResultsTag);
             Assert.Contains("f000e000-0000-0000-0000-000000000000", sendOperationResultsTag.Value);
-            Assert.Contains("2", sendOperationResultsTag.Value); // Delivered
+            Assert.Contains("\"SendResult\":2", sendOperationResultsTag.Value); // Delivered
         }
     }
 
@@ -52,11 +48,7 @@ public class RequestBodyTelemetryMiddlewareTests
     public async Task InvokeAsync_CallsNextMiddleware()
     {
         // Arrange
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = _ => true,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
-        };
+        using var listener = CreateListener();
         ActivitySource.AddActivityListener(listener);
 
         var (activitySource, activity) = CreateActivity();
@@ -107,11 +99,7 @@ public class RequestBodyTelemetryMiddlewareTests
     public async Task InvokeAsync_PreservesRequestBodyForNextMiddleware()
     {
         // Arrange
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = _ => true,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
-        };
+        using var listener = CreateListener();
         ActivitySource.AddActivityListener(listener);
 
         var (activitySource, activity) = CreateActivity();
@@ -136,40 +124,11 @@ public class RequestBodyTelemetryMiddlewareTests
         }
     }
 
-    private static DefaultHttpContext CreateHttpContext(string method, string body)
-    {
-        var context = new DefaultHttpContext();
-        context.Request.Method = method;
-        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
-        context.Request.ContentType = "application/json";
-        return context;
-    }
-
-    private static (ActivitySource ActivitySource, Activity Activity) CreateActivity()
-    {
-        var activitySource = new ActivitySource("TestSource");
-        var activity = activitySource.StartActivity("TestActivity");
-        Activity.Current = activity;
-        return (activitySource, activity!);
-    }
-
-    private static Microsoft.Extensions.Options.IOptions<EmailDeliveryReportSettings> CreateOptions(string parseObject)
-    {
-        return Microsoft.Extensions.Options.Options.Create(new EmailDeliveryReportSettings
-        {
-            ParseObject = parseObject
-        });
-    }
-
     [Fact]
     public async Task InvokeAsync_ParseObjectSendOperationResults_NonDeliveryReportEvent_DoesNotAddTag()
     {
         // Arrange
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = _ => true,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
-        };
+        using var listener = CreateListener();
         ActivitySource.AddActivityListener(listener);
 
         var (activitySource, activity) = CreateActivity();
@@ -200,18 +159,12 @@ public class RequestBodyTelemetryMiddlewareTests
     [InlineData("invalid-email-address", "invalid-email-address", "Invalid email without @ symbol")]
     [InlineData("ab@example.com", "***@example.com", "Email with 2-character local part")]
     [InlineData("x@example.com", "***@example.com", "Email with 1-character local part")]
-    [InlineData("a@example.com", "***@example.com", "Email with single character local part")]
     public async Task InvokeAsync_ParseObjectDeliveryReport_SpecialEmailCases_HandlesCorrectly(
         string recipientEmail,
         string expectedMaskedEmail,
         string _)
     {
-        // Arrange
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = _ => true,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
-        };
+        using ActivityListener listener = CreateListener();
         ActivitySource.AddActivityListener(listener);
 
         var (activitySource, activity) = CreateActivity();
@@ -239,5 +192,40 @@ public class RequestBodyTelemetryMiddlewareTests
             Assert.Contains(expectedMaskedEmail, deliveryReportsTag.Value);
             Assert.Contains("f000e000-0000-0000-0000-000000000000", deliveryReportsTag.Value);
         }
+    }
+
+    private static ActivityListener CreateListener()
+    {
+        // Arrange
+        return new ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+        };
+    }
+
+    private static DefaultHttpContext CreateHttpContext(string method, string body)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = method;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        context.Request.ContentType = "application/json";
+        return context;
+    }
+
+    private static (ActivitySource ActivitySource, Activity Activity) CreateActivity()
+    {
+        var activitySource = new ActivitySource("TestSource");
+        var activity = activitySource.StartActivity("TestActivity");
+        Activity.Current = activity;
+        return (activitySource, activity!);
+    }
+
+    private static Microsoft.Extensions.Options.IOptions<EmailDeliveryReportSettings> CreateOptions(string parseObject)
+    {
+        return Microsoft.Extensions.Options.Options.Create(new EmailDeliveryReportSettings
+        {
+            ParseObject = parseObject
+        });
     }
 }

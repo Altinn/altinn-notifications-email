@@ -30,6 +30,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly int _messagesBatchPollTimeoutMs = 100;
         private readonly int _maxConcurrentProcessingTasks = 50;
 
+        private readonly int _progressiveCommitIntervalMs = 250;
+        private readonly int _progressiveCommitMinNewSuccesses = 10;
+
         private readonly SemaphoreSlim _processingConcurrencySemaphore;
         private readonly ConcurrentDictionary<Guid, Task> _inFlightTasks = new();
 
@@ -150,7 +153,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     var batchProcessingResult = await LaunchBatchProcessing(messageBatch, processMessageFunc, retryMessageFunc, cancellationToken);
 
-                    await AwaitLaunchedTasksAndCommit(batchProcessingResult.LaunchedMessages, batchProcessingResult.SuccessfulNextOffsets);
+                    await AwaitLaunchedTasksAndProgressiveCommit(batchProcessingResult.LaunchedMessages, batchProcessingResult.SuccessfulNextOffsets, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -377,37 +380,61 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Finalizes batch processing by computing contiguous commit candidates from successful message processing results and safely committing them to Kafka.
+        /// Finalizes batch processing by progressively committing contiguous successes as tasks complete.
+        /// This reduces crash recovery churn while preserving the "contiguous only" rule per partition.
         /// </summary>
-        /// <param name="launchedMessages">
-        /// The complete list of messages that were launched for processing in this batch, in the order they were launched.
-        /// </param>
-        /// <param name="successfulNextOffsets">
-        /// A thread-safe collection containing the "next offset" (original offset + 1) for each message that was
-        /// successfully processed (including successful retries). These represent the offsets that are safe to commit to Kafka.
-        /// </param>
-        /// <returns>
-        /// A task that completes when all commit operations and logging have finished.
-        /// </returns>
-        private async Task AwaitLaunchedTasksAndCommit(List<ConsumeResult<string, string>> launchedMessages, ConcurrentBag<TopicPartitionOffset> successfulNextOffsets)
+        /// <param name="launchedMessages">Messages launched in this batch (in launch order).</param>
+        /// <param name="successfulNextOffsets">Thread-safe bag of per-message next-offsets for successful processing.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        private async Task AwaitLaunchedTasksAndProgressiveCommit(List<ConsumeResult<string, string>> launchedMessages, ConcurrentBag<TopicPartitionOffset> successfulNextOffsets, CancellationToken cancellationToken)
         {
-            if (!successfulNextOffsets.IsEmpty)
+            if (launchedMessages.Count == 0)
             {
-                var commitCandidates = ComputeContiguousCommitOffsets([.. launchedMessages], successfulNextOffsets);
+                _logger.LogWarning("// {Class} // No launched messages to commit", GetType().Name);
+                
+                await Task.Yield();
 
-                if (commitCandidates.Count != 0)
-                {
-                    SafeCommit(commitCandidates);
-                }
-                else
-                {
-                    _logger.LogWarning("// {Class} // No contiguous offsets eligible for commit in launched set of {Launched}", GetType().Name, launchedMessages.Count);
-                }
+                return;
             }
-            else
+
+            int lastObservedSuccessCount = 0;
+            var commitStopwatch = Stopwatch.StartNew();
+            var tasksToAwait = _inFlightTasks.Values.ToArray();
+            var lastCommittedByPartition = new Dictionary<TopicPartition, long>();
+
+            while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
             {
-                _logger.LogWarning("// {Class} // No messages successfully processed in launched set of {Launched}", GetType().Name, launchedMessages.Count);
+                if (tasksToAwait.All(e => e.IsCompleted))
+                {
+                    CommitContiguousAdvances(launchedMessages, successfulNextOffsets, lastCommittedByPartition);
+
+                    break;
+                }
+
+                int successCount = successfulNextOffsets.Count;
+                bool intervalReached = commitStopwatch.ElapsedMilliseconds >= _progressiveCommitIntervalMs;
+                bool thresholdReached = successCount - lastObservedSuccessCount >= _progressiveCommitMinNewSuccesses;
+
+                if (thresholdReached || intervalReached)
+                {
+                    CommitContiguousAdvances(launchedMessages, successfulNextOffsets, lastCommittedByPartition);
+
+                    lastObservedSuccessCount = successCount;
+
+                    commitStopwatch.Restart();
+                }
+
+                try
+                {
+                    await Task.WhenAny(tasksToAwait.Append(Task.Delay(_progressiveCommitIntervalMs, cancellationToken)));
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
+
+            CommitContiguousAdvances(launchedMessages, successfulNextOffsets, lastCommittedByPartition);
 
             await Task.Yield();
         }
@@ -473,6 +500,42 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
 
             return commitOffsets;
+        }
+
+        /// <summary>
+        /// Internal helper to compute contiguous commit candidates and commit only advances compared to the last committed per partition.
+        /// Preserves the "contiguous only" rule and avoids redundant commits.
+        /// </summary>
+        private void CommitContiguousAdvances(List<ConsumeResult<string, string>> launchedMessages, ConcurrentBag<TopicPartitionOffset> successfulNextOffsets, Dictionary<TopicPartition, long> lastCommittedByPartition)
+        {
+            if (successfulNextOffsets.IsEmpty)
+            {
+                return;
+            }
+
+            var commitCandidates = ComputeContiguousCommitOffsets([.. launchedMessages], successfulNextOffsets);
+            if (commitCandidates.Count == 0)
+            {
+                return;
+            }
+
+            // Filter to advancing offsets only.
+            var advancing = new List<TopicPartitionOffset>(commitCandidates.Count);
+            foreach (var c in commitCandidates)
+            {
+                var tp = c.TopicPartition;
+                var next = c.Offset.Value;
+                if (!lastCommittedByPartition.TryGetValue(tp, out var last) || next > last)
+                {
+                    advancing.Add(c);
+                    lastCommittedByPartition[tp] = next;
+                }
+            }
+
+            if (advancing.Count > 0)
+            {
+                SafeCommit(advancing);
+            }
         }
 
         /// <summary>

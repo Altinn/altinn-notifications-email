@@ -95,15 +95,19 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             _logger.LogInformation("// {Class} // Shutdown initiated. In-flight tasks: {Count}", GetType().Name, processingTasks.Length);
 
-            if (processingTasks.Length > 0)
+            foreach (var processingTask in processingTasks)
             {
                 try
                 {
-                    await Task.WhenAll(processingTasks).WaitAsync(TimeSpan.FromSeconds(15));
+                    await processingTask.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
                 }
-                catch (Exception ex)
+                catch (TimeoutException)
                 {
-                    _logger.LogError(ex, "// {Class} // Error awaiting tasks during shutdown", GetType().Name);
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
                 }
             }
 

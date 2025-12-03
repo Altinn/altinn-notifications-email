@@ -21,6 +21,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
     /// </summary>
     public abstract class KafkaConsumerBase : BackgroundService
     {
+        private int _failureFlag = 0;
         private readonly string _topicName;
         private volatile bool _isShutdownInitiated;
         private readonly ILogger<KafkaConsumerBase> _logger;
@@ -235,6 +236,16 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             return consumerConfig;
         }
+
+        /// <summary>
+        /// Indicates whether the current batch has encountered a failure.
+        /// </summary>
+        private bool HasFailed => Volatile.Read(ref _failureFlag) == 1;
+
+        /// <summary>
+        /// Atomically signals a failure for the current batch, preventing further task launches.
+        /// </summary>
+        private void SignalFailure() => Interlocked.Exchange(ref _failureFlag, 1);
 
         /// <summary>
         /// Creates and configures a Kafka consumer instance with error, statistics, and partition assignment handlers.
@@ -560,14 +571,16 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </returns>
         private async Task<BatchProcessingContext> ProcessPolledConsumeResults(BatchProcessingContext batchContext, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            int hasFailureFlag = 0;
+            // Reset failure flag for the new batch
+            Interlocked.Exchange(ref _failureFlag, 0);
+
             var successfulNextOffsets = new ConcurrentBag<TopicPartitionOffset>();
             var processingTasks = new List<Task>(batchContext.PolledConsumeResults.Count);
             var consumeResultsForLaunchedTasks = new List<ConsumeResult<string, string>>(batchContext.PolledConsumeResults.Count);
 
             foreach (var polledConsumeResult in batchContext.PolledConsumeResults)
             {
-                if (cancellationToken.IsCancellationRequested || Volatile.Read(ref hasFailureFlag) == 1 || _isShutdownInitiated)
+                if (cancellationToken.IsCancellationRequested || HasFailed || _isShutdownInitiated)
                 {
                     break;
                 }
@@ -579,7 +592,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     {
                         try
                         {
-                            if (Volatile.Read(ref hasFailureFlag) == 1)
+                            if (HasFailed)
                             {
                                 return;
                             }
@@ -592,7 +605,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         }
                         catch (OperationCanceledException)
                         {
-                            Interlocked.Exchange(ref hasFailureFlag, 1);
+                            SignalFailure();
                         }
                         catch (Exception ex)
                         {
@@ -610,7 +623,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                             }
                             catch (Exception retryEx)
                             {
-                                Interlocked.Exchange(ref hasFailureFlag, 1);
+                                SignalFailure();
 
                                 _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
 

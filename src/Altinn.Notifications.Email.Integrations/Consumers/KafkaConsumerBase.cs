@@ -99,7 +99,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             {
                 try
                 {
-                    await processingTask.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                    await processingTask.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
                 }
                 catch (TimeoutException)
                 {

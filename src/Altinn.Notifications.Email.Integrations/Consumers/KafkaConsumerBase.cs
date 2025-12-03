@@ -571,7 +571,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </returns>
         private async Task<BatchProcessingContext> ProcessPolledConsumeResults(BatchProcessingContext batchContext, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            // Reset failure flag for the new batch
             Interlocked.Exchange(ref _failureFlag, 0);
 
             var successfulNextOffsets = new ConcurrentBag<TopicPartitionOffset>();
@@ -587,62 +586,62 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
-                var processingTask = Task.Run(
-                    async () =>
+                async Task ProcessingWrapper()
+                {
+                    try
                     {
+                        if (HasFailed)
+                        {
+                            return;
+                        }
+
+                        await processMessageFunc(polledConsumeResult.Message.Value);
+
+                        _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+
+                        successfulNextOffsets.Add(new TopicPartitionOffset(polledConsumeResult.TopicPartition, polledConsumeResult.Offset + 1));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        SignalFailure();
+                    }
+                    catch (Exception ex)
+                    {
+                        _failedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+
+                        _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, polledConsumeResult.Offset);
+
                         try
                         {
-                            if (HasFailed)
-                            {
-                                return;
-                            }
+                            await retryMessageFunc(polledConsumeResult.Message.Value);
 
-                            await processMessageFunc(polledConsumeResult.Message.Value);
-
-                            _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+                            _retriedSucceededCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
 
                             successfulNextOffsets.Add(new TopicPartitionOffset(polledConsumeResult.TopicPartition, polledConsumeResult.Offset + 1));
                         }
-                        catch (OperationCanceledException)
+                        catch (Exception retryEx)
                         {
                             SignalFailure();
+
+                            _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+
+                            _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, polledConsumeResult.Offset);
                         }
-                        catch (Exception ex)
+                    }
+                    finally
+                    {
+                        try
                         {
-                            _failedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                            _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, polledConsumeResult.Offset);
-
-                            try
-                            {
-                                await retryMessageFunc(polledConsumeResult.Message.Value);
-
-                                _retriedSucceededCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                                successfulNextOffsets.Add(new TopicPartitionOffset(polledConsumeResult.TopicPartition, polledConsumeResult.Offset + 1));
-                            }
-                            catch (Exception retryEx)
-                            {
-                                SignalFailure();
-
-                                _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                                _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, polledConsumeResult.Offset);
-                            }
+                            _processingConcurrencySemaphore.Release();
                         }
-                        finally
+                        catch (SemaphoreFullException ex)
                         {
-                            try
-                            {
-                                _processingConcurrencySemaphore.Release();
-                            }
-                            catch (SemaphoreFullException ex)
-                            {
-                                _logger.LogWarning(ex, "// {Class} // Semaphore already full when releasing for offset {Offset}", GetType().Name, polledConsumeResult.Offset);
-                            }
+                            _logger.LogWarning(ex, "// {Class} // Semaphore already full when releasing for offset {Offset}", GetType().Name, polledConsumeResult.Offset);
                         }
-                    },
-                    cancellationToken);
+                    }
+                }
+
+                var processingTask = ProcessingWrapper();
 
                 processingTasks.Add(processingTask);
                 consumeResultsForLaunchedTasks.Add(polledConsumeResult);

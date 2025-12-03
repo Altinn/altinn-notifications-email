@@ -8,6 +8,7 @@ using Altinn.Notifications.Email.Integrations.Configuration;
 using Altinn.Notifications.Email.Integrations.Consumers;
 
 using Confluent.Kafka;
+using Confluent.Kafka.Extensions.Diagnostics;
 
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -94,11 +95,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             _consumer.Unsubscribe();
 
-            var processingTasks = _inFlightTasks.Values.ToArray();
-
-            _logger.LogInformation("// {Class} // Shutdown initiated. In-flight tasks: {Count}", GetType().Name, processingTasks.Length);
-
-            foreach (var processingTask in processingTasks)
+            foreach (var processingTask in _inFlightTasks.Values)
             {
                 try
                 {
@@ -140,6 +137,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         await Task.Delay(10, cancellationToken);
                         continue;
                     }
+
+
+
+
+
 
                     _consumedCounter.Add(messageBatch.Length, KeyValuePair.Create<string, object?>("topic", _topicName));
 
@@ -211,8 +213,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Builds the Kafka <see cref="ConsumerConfig"/> using the shared client configuration and
-        /// applies consumer-specific tuning for batching, throughput and cooperative offset management.
+        /// Builds the Kafka <see cref="ConsumerConfig"/> using the shared client configuration.
         /// </summary>
         /// <param name="settings">The configuration object used to hold integration settings for Kafka.</param>
         /// <returns>A fully initialized <see cref="ConsumerConfig"/> ready to be used by a <see cref="ConsumerBuilder{TKey, TValue}"/>.</returns>
@@ -331,7 +332,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// Polls messages from the underlying Kafka consumer until one of the stopping conditions is met.
         /// </summary>
         /// <param name="maxBatchSize">The maximum number of messages to return.</param>
-        /// <param name="timeoutMs">The total maximum time (in milliseconds) spent polling for this batch.</param>
+        /// <param name="timeoutMs">The total maximum time (in milliseconds) spent polling for messages.</param>
         /// <param name="cancellationToken">Token observed for cooperative cancellation.</param>
         /// <returns>An array (possibly empty) of consecutively polled <see cref="ConsumeResult{TKey,TValue}"/> instances.</returns>
         private ConsumeResult<string, string>[] FetchMessageBatch(int maxBatchSize, int timeoutMs, CancellationToken cancellationToken)
@@ -346,15 +347,15 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             while (polledMessages.Count < maxBatchSize && !cancellationToken.IsCancellationRequested)
             {
-                var remaining = deadline - DateTime.UtcNow;
-                if (remaining <= TimeSpan.Zero)
+                var remainingTimeSpan = deadline - DateTime.UtcNow;
+                if (remainingTimeSpan <= TimeSpan.Zero)
                 {
                     break;
                 }
 
                 try
                 {
-                    var result = _consumer.Consume(remaining);
+                    var result = _consumer.ConsumeWithInstrumentation(remainingTimeSpan);
                     if (result is null)
                     {
                         break;
@@ -391,7 +392,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             if (launchedMessages.Count == 0)
             {
                 _logger.LogWarning("// {Class} // No launched messages to commit", GetType().Name);
-                
+
                 await Task.Yield();
 
                 return;

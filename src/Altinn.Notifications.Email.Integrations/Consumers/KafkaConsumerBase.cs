@@ -579,12 +579,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             foreach (var polledConsumeResult in batchContext.PolledConsumeResults)
             {
+                await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
+
                 if (cancellationToken.IsCancellationRequested || HasFailed || _isShutdownInitiated)
                 {
+                    _processingConcurrencySemaphore.Release();
+
                     break;
                 }
-
-                await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
 
                 async Task ProcessingWrapper()
                 {

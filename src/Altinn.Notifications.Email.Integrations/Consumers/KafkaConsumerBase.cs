@@ -277,6 +277,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
                     _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(p => p.Partition.Value)));
+
+                    SignalFailure();
                 })
                 .SetPartitionsAssignedHandler((_, partitions) =>
                 {

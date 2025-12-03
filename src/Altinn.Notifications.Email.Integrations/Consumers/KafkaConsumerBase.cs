@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 
 using Altinn.Notifications.Email.Integrations.Configuration;
+using Altinn.Notifications.Email.Integrations.Consumers;
 
 using Confluent.Kafka;
 
@@ -127,19 +128,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         messageBatch[^1].Offset,
                         _inFlightTasks.Count);
 
-                    var processingStartTime = DateTime.UtcNow;
+                    var batchProcessingResult = await LaunchBatchProcessing(messageBatch, processMessageFunc, retryMessageFunc, cancellationToken);
 
-                    var (launchedMessages, successfulNextOffsets, failureDetected) = await LaunchBatchProcessing(messageBatch, processMessageFunc, retryMessageFunc, cancellationToken);
-
-                    await AwaitLaunchedTasksAndCommit(launchedMessages, successfulNextOffsets);
-
-                    _logger.LogInformation(
-                        "// KafkaConsumerBase // ConsumeMessage // Batch completed for topic {Topic}. Launched={Launched} Polled={Polled} FailureDetected={Failure} Duration={Duration:F0}ms",
-                        _topicName,
-                        launchedMessages.Count,
-                        messageBatch.Length,
-                        Volatile.Read(ref failureDetected) == 1,
-                        (DateTime.UtcNow - processingStartTime).TotalMilliseconds);
+                    await AwaitLaunchedTasksAndCommit(batchProcessingResult.LaunchedMessages, batchProcessingResult.SuccessfulNextOffsets);
                 }
                 catch (OperationCanceledException)
                 {
@@ -333,13 +324,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// A tuple containing:
         /// - LaunchedMessages: The subset of messages from the batch that were actually launched for processing (may be less than the full batch if fail-fast was triggered).
         /// - SuccessfulNextOffsets: A thread-safe collection of TopicPartitionOffset values representing the next offset to commit for successfully processed messages (original offset + 1).
-        /// - FailureDetectedFlag: An interlocked integer flag (0 = no failures, 1 = failure detected) used to coordinate fail-fast behavior across concurrent tasks.
         /// </returns>
-        private async Task<(List<ConsumeResult<string, string>> LaunchedMessages, ConcurrentBag<TopicPartitionOffset> SuccessfulNextOffsets, int FailureDetectedFlag)> LaunchBatchProcessing(
-            ConsumeResult<string, string>[] messageBatch,
-            Func<string, Task> processMessageFunc,
-            Func<string, Task> retryMessageFunc,
-            CancellationToken cancellationToken)
+        private async Task<BatchProcessingResult> LaunchBatchProcessing(ConsumeResult<string, string>[] messageBatch, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
             var failureDetectedFlag = 0;
             var launchedTasks = new List<Task>(messageBatch.Length);
@@ -428,7 +414,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 _logger.LogDebug(ex, "// {Class} // Aggregate completion contained failures", GetType().Name);
             }
 
-            return (launchedMessages, successfulNextOffsets, failureDetectedFlag);
+            return new BatchProcessingResult(launchedMessages, successfulNextOffsets);
         }
 
         /// <summary>

@@ -29,6 +29,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
         private readonly int _maxPollDurationMs = 100;
         private readonly int _polledConsumeResultsSize = 50;
+        private readonly SemaphoreSlim _processingConcurrencySemaphore;
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _polledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
@@ -46,6 +47,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             var configuration = BuildConfiguration(settings);
             _consumer = BuildConsumer(configuration);
+
+            _processingConcurrencySemaphore = new SemaphoreSlim(_polledConsumeResultsSize, _polledConsumeResultsSize);
         }
 
         /// <inheritdoc/>
@@ -62,6 +65,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             finally
             {
                 _consumer.Dispose();
+                _processingConcurrencySemaphore.Dispose();
                 base.Dispose();
             }
         }
@@ -477,6 +481,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             return async () =>
             {
+                await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
                 try
                 {
                     if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
@@ -517,6 +522,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                         return null;
                     }
+                }
+                finally
+                {
+                    _processingConcurrencySemaphore.Release();
                 }
             };
         }

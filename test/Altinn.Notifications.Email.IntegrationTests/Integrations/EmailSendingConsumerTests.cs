@@ -46,6 +46,11 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        if (_serviceProvider != null)
+        {
+            await _serviceProvider.DisposeAsync();
+        }
+
         await KafkaUtil.DeleteTopicAsync(_emailSendingConsumerTopic);
         await KafkaUtil.DeleteTopicAsync(_emailSendingAcceptedProducerTopic);
     }
@@ -83,6 +88,56 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         // Assert
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), "StopAsync took too long, suggesting internal cancellation was not signaled.");
         sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GivenBatchOfMessages_ThenProcessingRunsInParallel_NotSequential()
+    {
+        // Arrange: delay per message to observe parallel effect
+        var processedCount = 0;
+        var allProcessedSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Returns(async () =>
+            {
+                Interlocked.Increment(ref processedCount);
+                await Task.Delay(300); // simulated per-message work
+                if (Volatile.Read(ref processedCount) >= 20)
+                {
+                    allProcessedSignal.Set();
+                }
+            });
+
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
+
+        // Create 20 messages to form a batch
+        var emails = Enumerable.Range(0, 20)
+            .Select(i => new Core.Sending.Email(Guid.NewGuid(), $"subject-{i}", $"body-{i}", "from", "to", EmailContentType.Plain))
+            .ToList();
+
+        // Act
+        await consumer.StartAsync(CancellationToken.None);
+        var stopwatch = Stopwatch.StartNew();
+
+        foreach (var email in emails)
+        {
+            await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        }
+
+        Assert.True(
+            await WaitForConditionAsync(() => allProcessedSignal.IsSet, TimeSpan.FromSeconds(6), TimeSpan.FromMilliseconds(50)),
+            "Batch was not processed within expected time.");
+
+        stopwatch.Stop();
+        await consumer.StopAsync(CancellationToken.None);
+
+        // Assert: sequential would be ~6s (20 * 300ms); parallel should be far lower
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3.5), $"Processing did not appear parallel. Elapsed={stopwatch.Elapsed.TotalMilliseconds}ms");
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(20));
     }
 
     [Fact]
@@ -265,6 +320,64 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
     }
 
+    [Fact]
+    public async Task GivenMoreThanMaxBatchSizeMessages_ThenAtLeastMaxBatchAreProcessedInFirstBatch_RemainderInNextBatch()
+    {
+        // Arrange
+        var processedCount = 0;
+        var reached100Signal = new ManualResetEventSlim(false);
+        var allProcessedSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Returns(async () =>
+            {
+                var current = Interlocked.Increment(ref processedCount);
+                await Task.Delay(5);
+
+                if (current == 100)
+                {
+                    reached100Signal.Set();
+                }
+
+                if (current == 150)
+                {
+                    allProcessedSignal.Set();
+                }
+            });
+
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
+
+        // Produce 150 messages; base max batch size is 100
+        var emails = Enumerable.Range(0, 150)
+            .Select(i => new Core.Sending.Email(Guid.NewGuid(), $"s-{i}", $"b-{i}", "from", "to", EmailContentType.Plain))
+            .ToList();
+
+        // Act
+        await consumer.StartAsync(CancellationToken.None);
+
+        foreach (var email in emails)
+        {
+            await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        }
+
+        // Assert
+        Assert.True(
+            await WaitForConditionAsync(() => reached100Signal.IsSet, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(20)),
+            "Did not process at least the first batch of 100 messages promptly.");
+
+        Assert.True(
+            await WaitForConditionAsync(() => allProcessedSignal.IsSet, TimeSpan.FromSeconds(8), TimeSpan.FromMilliseconds(50)),
+            "Remaining messages from the next batch were not processed within the expected window.");
+
+        await consumer.StopAsync(CancellationToken.None);
+
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(150));
+    }
+
     /// <summary>
     /// Creates a mocked <see cref="ISendingService"/> that signals a provided <see cref="ManualResetEventSlim"/>
     /// when <see cref="ISendingService.SendAsync(Core.Sending.Email)"/> is invoked.
@@ -340,7 +453,8 @@ public class EmailSendingConsumerTests : IAsyncLifetime
            .AddHostedService<SendEmailQueueConsumer>()
            .AddSingleton(sendEmailQueueConsumerLogger)
            .AddSingleton<ICommonProducer, CommonProducer>();
-
+        
+        _serviceProvider?.Dispose();
         _serviceProvider = services.BuildServiceProvider();
 
         var emailSendingConsumer = _serviceProvider.GetService(typeof(IHostedService)) as SendEmailQueueConsumer;

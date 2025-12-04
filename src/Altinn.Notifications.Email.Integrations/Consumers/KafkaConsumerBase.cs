@@ -4,6 +4,7 @@ using Confluent.Kafka;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
@@ -35,6 +36,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private static readonly Counter<int> _processedCounter = _meter.CreateCounter<int>("kafka.consumer.processed");
         private static readonly Counter<int> _retriedFailedCounter = _meter.CreateCounter<int>("kafka.consumer.retried.failed");
         private static readonly Counter<int> _retriedSucceededCounter = _meter.CreateCounter<int>("kafka.consumer.retried.succeeded");
+        private static readonly Histogram<double> _batchLatencyMs = _meter.CreateHistogram<double>("kafka.consumer.batch.latency.ms");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
@@ -127,11 +129,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
             {
+                var batchStopwatch = Stopwatch.StartNew();
+
                 ResetMessageProcessingFailureSignal();
 
                 var batchProcessingContext = PollConsumeResults(cancellationToken);
                 if (batchProcessingContext.PolledConsumeResults.Count == 0)
                 {
+                    batchStopwatch.Stop();
                     await Task.Delay(10, cancellationToken);
                     continue;
                 }
@@ -145,6 +150,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 {
                     CommitNormalizedOffsets(offsetsToCommit);
                 }
+
+                batchStopwatch.Stop();
+
+                _batchLatencyMs.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _topicName));
             }
         }
 

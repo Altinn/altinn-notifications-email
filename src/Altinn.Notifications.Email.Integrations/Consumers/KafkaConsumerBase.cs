@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.Metrics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -29,6 +30,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly int _maxPollDurationMs = 100;
         private readonly int _polledConsumeResultsSize = 50;
         private readonly SemaphoreSlim _processingConcurrencySemaphore;
+        private readonly ConcurrentDictionary<TopicPartition, long> _latestProcessedOffsetByPartition = new();
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _polledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
@@ -232,8 +234,32 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
-                    // Prevent launching new tasks in the current batch during rebalance.
                     SignalMessageProcessingFailure();
+
+                    var processedOffset = partitions
+                    .Select(partition => _latestProcessedOffsetByPartition.TryGetValue(partition.TopicPartition, out var next) ? new TopicPartitionOffset(partition.TopicPartition, new Offset(next)) : null)
+                    .Where(offset => offset != null);
+
+                    if (processedOffset.Any())
+                    {
+                        try
+                        {
+                            _consumer.Commit(processedOffset);
+                        }
+                        catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+                        {
+                            _logger.LogWarning(ex, "// {Class} // Commit on revocation skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+                        }
+                        catch (KafkaException ex)
+                        {
+                            _logger.LogError(ex, "// {Class} // Commit on revocation failed unexpectedly", GetType().Name);
+                        }
+                    }
+
+                    foreach (var partition in partitions)
+                    {
+                        _latestProcessedOffsetByPartition.TryRemove(partition.TopicPartition, out var _);
+                    }
 
                     _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
                 })
@@ -445,6 +471,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             await Task.WhenAll(messageProcessingTasks);
 
             var successfulNextOffsets = messageProcessingTasks.Select(e => e.Result).Where(e => e is not null).Select(e => e!);
+
+            foreach (var successfulNextOffset in successfulNextOffsets)
+            {
+                _latestProcessedOffsetByPartition.AddOrUpdate(successfulNextOffset.TopicPartition, successfulNextOffset.Offset.Value, (_, existing) => Math.Max(existing, successfulNextOffset.Offset.Value));
+            }
 
             return batchProcessingContext with
             {

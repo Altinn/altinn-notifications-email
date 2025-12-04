@@ -1,4 +1,6 @@
-﻿using Confluent.Kafka;
+﻿using System.Collections.Immutable;
+
+using Confluent.Kafka;
 
 namespace Altinn.Notifications.Email.Integrations.Consumers;
 
@@ -8,13 +10,12 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 public sealed record BatchProcessingContext
 {
     /// <summary>
-    /// Thread-safe collection of per-message next offsets (original offset + 1) for successfully processed consume results.
+    /// Per-message next offsets (original offset + 1) for successfully processed consume results.
     /// </summary>
-    public IList<TopicPartitionOffset> SuccessfulNextOffsets { get; init; } = [];
+    public IImmutableList<TopicPartitionOffset> SuccessfulNextOffsets { get; init; } = [];
 
     /// <summary>
     /// Consume results obtained during the poll phase for this batch.
-    /// This may include items that were not launched, depending on failure/cancellation conditions.
     /// </summary>
-    public IList<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
+    public IImmutableList<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
 }

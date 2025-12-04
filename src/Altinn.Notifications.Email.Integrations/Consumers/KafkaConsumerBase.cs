@@ -465,7 +465,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private void ResetMessageProcessingFailureSignal() => Interlocked.Exchange(ref _processingFailureSignaledCounter, 0);
 
         /// <summary>
-        /// Launches processing tasks for the polled consume results, awaits completion, and collects successful next offsets.
+        /// Launches processing tasks using Parallel.ForEachAsync for efficient concurrent processing with built-in resource management.
+        /// Replaces manual task orchestration with Task.WhenAll() and provides better concurrency control.
         /// </summary>
         /// <param name="processingContext">
         /// The current batch context containing the polled consume results to be processed.
@@ -489,21 +490,43 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 return processingContext;
             }
 
-            var processingTasks = processingContext.PolledConsumeResults.Select(consumeResult => ProcessSingleMessageAsync(consumeResult, processMessageFunc, retryMessageFunc, cancellationToken));
+            var parallelOptions = new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = _polledConsumeResultsSize
+            };
 
-            var completedProcessingTasks = await Task.WhenAll(processingTasks);
+            var successfulOffsets = new ConcurrentBag<TopicPartitionOffset>();
 
-            var successfulNextOffsets = completedProcessingTasks.Where(result => result is not null).Select(result => result!);
+            try
+            {
+                await Parallel.ForEachAsync(
+                    processingContext.PolledConsumeResults,
+                    parallelOptions,
+                    async (consumeResult, cancellationToken) =>
+                    {
+                        var result = await ProcessSingleMessageAsync(consumeResult, processMessageFunc, retryMessageFunc, cancellationToken);
+
+                        if (result is not null)
+                        {
+                            successfulOffsets.Add(result);
+                        }
+                    });
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when cancellation is requested
+            }
 
             _latestProcessedOffsetByPartition.Clear();
-            foreach (var successfulNextOffset in successfulNextOffsets)
+            foreach (var successfulOffset in successfulOffsets)
             {
-                _latestProcessedOffsetByPartition.AddOrUpdate(successfulNextOffset!.TopicPartition, successfulNextOffset.Offset.Value, (_, existing) => Math.Max(existing, successfulNextOffset.Offset.Value));
+                _latestProcessedOffsetByPartition.AddOrUpdate(successfulOffset.TopicPartition, successfulOffset.Offset.Value, (_, existing) => Math.Max(existing, successfulOffset.Offset.Value));
             }
 
             return processingContext with
             {
-                SuccessfulNextOffsets = [.. successfulNextOffsets]
+                SuccessfulNextOffsets = [.. successfulOffsets]
             };
         }
 
@@ -537,6 +560,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             {
                 if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
                 {
+                    _processingConcurrencySemaphore.Release();
+
                     return null;
                 }
 

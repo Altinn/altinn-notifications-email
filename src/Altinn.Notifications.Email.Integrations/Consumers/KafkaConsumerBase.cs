@@ -445,19 +445,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             await Task.WhenAll(messageProcessingTasks);
 
-            var successfulNextOffsets = new ConcurrentBag<TopicPartitionOffset>();
-            foreach (var messageProcessingTask in messageProcessingTasks)
-            {
-                var successfulNextOffset = await messageProcessingTask;
-                if (successfulNextOffset is not null)
-                {
-                    successfulNextOffsets.Add(successfulNextOffset);
-                }
-            }
+            var successfulNextOffsets = messageProcessingTasks.Select(e => e.Result).Where(e => e is not null).Select(e => e!);
 
             return batchProcessingContext with
             {
-                SuccessfulNextOffsets = successfulNextOffsets
+                SuccessfulNextOffsets = [.. successfulNextOffsets]
             };
         }
 

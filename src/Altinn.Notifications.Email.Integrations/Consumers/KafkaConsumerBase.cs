@@ -1,15 +1,13 @@
-﻿using System.Collections.Concurrent;
+﻿using Altinn.Notifications.Email.Integrations.Configuration;
+using Altinn.Notifications.Email.Integrations.Consumers;
+using Confluent.Kafka;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
-
-using Altinn.Notifications.Email.Integrations.Configuration;
-using Altinn.Notifications.Email.Integrations.Consumers;
-
-using Confluent.Kafka;
-
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using static Confluent.Kafka.ConfigPropertyNames;
 
 namespace Altinn.Notifications.Integrations.Kafka.Consumers
 {
@@ -89,6 +87,23 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             _consumer.Unsubscribe();
 
             _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_topicName));
+
+            var offsetsToCommit = _latestProcessedOffsetByPartition.Select(e => new TopicPartitionOffset(e.Key, new Offset(e.Value)));
+            if (offsetsToCommit.Any())
+            {
+                try
+                {
+                    _consumer.Commit(offsetsToCommit);
+
+                    _logger.LogInformation("// {Class} // Committed offsets for in-flight tasks during shutdown", GetType().Name);
+                }
+                catch (KafkaException ex)
+                {
+                    _logger.LogError(ex, "// {Class} // Failed to commit offsets during shutdown", GetType().Name);
+                }
+            }
+
+            _consumer.Close();
 
             await base.StopAsync(cancellationToken);
         }

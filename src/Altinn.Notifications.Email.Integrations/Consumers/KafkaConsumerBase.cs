@@ -29,7 +29,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly int _maxPollDurationMs = 100;
         private readonly int _polledConsumeResultsSize = 100;
 
-        private readonly ConcurrentDictionary<TopicPartition, long> _latestProcessedOffsetByPartition = new();
+        private volatile BatchProcessingContext? _lastCompletedBatchContext;
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _polledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
@@ -87,18 +87,18 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_topicName));
 
-            var offsetsToCommit = _latestProcessedOffsetByPartition.Select(e => new TopicPartitionOffset(e.Key, new Offset(e.Value)));
-            if (offsetsToCommit.Any())
+            var contiguousOffsets = _lastCompletedBatchContext is not null ? ComputeContiguousCommitOffsets(_lastCompletedBatchContext) : [];
+            if (contiguousOffsets.Count > 0)
             {
                 try
                 {
-                    _consumer.Commit(offsetsToCommit);
+                    _consumer.Commit(contiguousOffsets);
 
-                    _logger.LogInformation("// {Class} // Committed offsets for processed messages during shutdown", GetType().Name);
+                    _logger.LogInformation("// {Class} // Committed contiguous offsets for processed messages during shutdown", GetType().Name);
                 }
                 catch (KafkaException ex)
                 {
-                    _logger.LogError(ex, "// {Class} // Failed to commit offsets for processed messages during shutdown", GetType().Name);
+                    _logger.LogError(ex, "// {Class} // Failed to commit contiguous offsets during shutdown", GetType().Name);
                 }
             }
 
@@ -142,6 +142,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 batchProcessingContext = await ProcessConsumeResultsAsync(batchProcessingContext, processMessageFunc, retryMessageFunc, cancellationToken);
 
+                _lastCompletedBatchContext = batchProcessingContext;
+
                 var contiguousCommitOffsets = ComputeContiguousCommitOffsets(batchProcessingContext);
                 if (contiguousCommitOffsets.Count > 0)
                 {
@@ -173,9 +175,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 return "EMPTY";
             }
 
-            ReadOnlySpan<byte> topicNameBytes = Encoding.UTF8.GetBytes(topicName);
-
-            byte[] digest = SHA256.HashData(topicNameBytes);
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(topicName));
             string hex = Convert.ToHexString(digest.AsSpan(0, 8));
 
             return hex.ToLowerInvariant();
@@ -288,15 +288,16 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 {
                     SignalMessageProcessingFailure();
 
-                    var processedOffset = partitions
-                    .Select(partition => _latestProcessedOffsetByPartition.TryGetValue(partition.TopicPartition, out var next) ? new TopicPartitionOffset(partition.TopicPartition, new Offset(next)) : null)
-                    .Where(offset => offset != null);
+                    var contiguousOffsets = _lastCompletedBatchContext is not null ? ComputeContiguousCommitOffsets(_lastCompletedBatchContext) : [];
+                    var toCommit = contiguousOffsets
+                        .Where(o => partitions.Any(p => p.TopicPartition.Equals(o.TopicPartition)))
+                        .ToList();
 
-                    if (processedOffset.Any())
+                    if (toCommit.Count > 0)
                     {
                         try
                         {
-                            _consumer.Commit(processedOffset);
+                            _consumer.Commit(toCommit);
                         }
                         catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
                         {
@@ -306,11 +307,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         {
                             _logger.LogError(ex, "// {Class} // Commit on revocation failed unexpectedly", GetType().Name);
                         }
-                    }
-
-                    foreach (var partition in partitions)
-                    {
-                        _latestProcessedOffsetByPartition.TryRemove(partition.TopicPartition, out var _);
                     }
 
                     _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
@@ -502,12 +498,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             catch (OperationCanceledException)
             {
                 // Expected when cancellation is requested
-            }
-
-            _latestProcessedOffsetByPartition.Clear();
-            foreach (var successfulOffset in successfulOffsets)
-            {
-                _latestProcessedOffsetByPartition.AddOrUpdate(successfulOffset.TopicPartition, successfulOffset.Offset.Value, (_, existing) => Math.Max(existing, successfulOffset.Offset.Value));
             }
 
             return processingContext with

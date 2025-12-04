@@ -19,26 +19,25 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
     /// </summary>
     public abstract class KafkaConsumerBase : BackgroundService
     {
-        private readonly string _topicName;
+        private int _batchFailureFlag;
+        private int _consumerClosedFlag;
+        private int _shutdownInitiatedFlag;
+
+        private readonly int _maxBatchSize = 100;
+        private readonly int _batchPollTimeoutMs = 100;
+
+        private readonly string _subscribedTopicName;
         private readonly ILogger<KafkaConsumerBase> _logger;
-        private readonly IConsumer<string, string> _consumer;
-
-        private int _consumerClosedCounter;
-        private int _shutdownInitiatedCounter;
-        private int _processingFailureSignaledCounter;
-
-        private readonly int _maxPollDurationMs = 100;
-        private readonly int _polledConsumeResultsSize = 100;
-
-        private CancellationTokenSource? _cancellationTokenSource;
-        private volatile KafkaBatchState? _lastCompletedBatchContext;
+        private volatile KafkaBatchState? _lastProcessedBatch;
+        private readonly IConsumer<string, string> _kafkaConsumer;
+        private CancellationTokenSource? _internalCancellationSource;
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
-        private static readonly Counter<int> _polledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
-        private static readonly Counter<int> _processedCounter = _meter.CreateCounter<int>("kafka.consumer.processed");
-        private static readonly Counter<int> _retriedFailedCounter = _meter.CreateCounter<int>("kafka.consumer.retried.failed");
-        private static readonly Counter<int> _retriedSucceededCounter = _meter.CreateCounter<int>("kafka.consumer.retried.succeeded");
-        private static readonly Histogram<double> _batchLatencyMs = _meter.CreateHistogram<double>("kafka.consumer.batch.latency.ms");
+        private static readonly Counter<int> _messagesPolledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
+        private static readonly Counter<int> _messagesProcessedCounter = _meter.CreateCounter<int>("kafka.consumer.processed");
+        private static readonly Counter<int> _retryFailureCounter = _meter.CreateCounter<int>("kafka.consumer.retried.failed");
+        private static readonly Counter<int> _retrySuccessCounter = _meter.CreateCounter<int>("kafka.consumer.retried.succeeded");
+        private static readonly Histogram<double> _batchProcessingLatency = _meter.CreateHistogram<double>("kafka.consumer.batch.latency.ms");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
@@ -46,10 +45,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         protected KafkaConsumerBase(string topicName, KafkaSettings settings, ILogger<KafkaConsumerBase> logger)
         {
             _logger = logger;
-            _topicName = topicName;
+            _subscribedTopicName = topicName;
 
             var configuration = BuildConfiguration(settings);
-            _consumer = BuildConsumer(configuration);
+            _kafkaConsumer = BuildConsumer(configuration);
         }
 
         /// <inheritdoc/>
@@ -59,7 +58,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             {
                 if (!IsConsumerClosed)
                 {
-                    _consumer.Close();
+                    SignalConsumerClosed();
+
+                    _kafkaConsumer.Close();
                 }
             }
             catch (Exception ex)
@@ -68,14 +69,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
             finally
             {
-                SignalConsumerClosed();
+                _kafkaConsumer.Dispose();
 
-                _consumer.Dispose();
-
-                if (_cancellationTokenSource is not null)
-                {
-                    _cancellationTokenSource.Dispose();
-                }
+                _internalCancellationSource?.Dispose();
 
                 base.Dispose();
             }
@@ -84,11 +80,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <inheritdoc/>
         public override Task StartAsync(CancellationToken cancellationToken)
         {
-            _cancellationTokenSource = new CancellationTokenSource();
+            _internalCancellationSource = new CancellationTokenSource();
 
-            _consumer.Subscribe(_topicName);
+            _kafkaConsumer.Subscribe(_subscribedTopicName);
 
-            _logger.LogInformation("// {Class} // subscribed to topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
+            _logger.LogInformation("// {Class} // subscribed to topic {Topic}", GetType().Name, ComputeTopicFingerprint(_subscribedTopicName));
 
             return base.StartAsync(cancellationToken);
         }
@@ -98,23 +94,23 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             SignalShutdownIsInitiated();
 
-            if (_cancellationTokenSource != null)
+            if (_internalCancellationSource != null)
             {
-                await _cancellationTokenSource.CancelAsync();
+                await _internalCancellationSource.CancelAsync();
             }
 
-            _consumer.Unsubscribe();
+            _kafkaConsumer.Unsubscribe();
 
-            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_topicName));
+            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_subscribedTopicName));
 
             await base.StopAsync(cancellationToken);
 
-            var contiguousOffsets = _lastCompletedBatchContext is not null ? ComputeContiguousCommitOffsets(_lastCompletedBatchContext) : [];
+            var contiguousOffsets = _lastProcessedBatch is not null ? ComputeContiguousCommitOffsets(_lastProcessedBatch) : [];
             if (contiguousOffsets.Count > 0 && !IsConsumerClosed)
             {
                 try
                 {
-                    _consumer.Commit(contiguousOffsets);
+                    _kafkaConsumer.Commit(contiguousOffsets);
 
                     _logger.LogInformation("// {Class} // Committed contiguous offsets for processed messages during shutdown", GetType().Name);
                 }
@@ -128,7 +124,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             {
                 SignalConsumerClosed();
 
-                _consumer.Close();
+                _kafkaConsumer.Close();
             }
         }
 
@@ -149,9 +145,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </param>
         protected async Task ConsumeMessageAsync(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            using var cancellationTokenSource = _cancellationTokenSource is null
+            using var cancellationTokenSource = _internalCancellationSource is null
                 ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
-                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cancellationTokenSource.Token);
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _internalCancellationSource.Token);
 
             var linkedCancellationToken = cancellationTokenSource.Token;
 
@@ -169,11 +165,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     continue;
                 }
 
-                _polledCounter.Add(KafkaBatchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
+                _messagesPolledCounter.Add(KafkaBatchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
                 KafkaBatchState = await ProcessConsumeResultsAsync(KafkaBatchState, processMessageFunc, retryMessageFunc, linkedCancellationToken);
 
-                _lastCompletedBatchContext = KafkaBatchState;
+                _lastProcessedBatch = KafkaBatchState;
 
                 var contiguousCommitOffsets = ComputeContiguousCommitOffsets(KafkaBatchState);
                 if (contiguousCommitOffsets.Count > 0)
@@ -183,24 +179,24 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 batchStopwatch.Stop();
 
-                _batchLatencyMs.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _topicName));
+                _batchProcessingLatency.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _subscribedTopicName));
             }
         }
 
         /// <summary>
         /// Indicates whether the consumer has been closed.
         /// </summary>
-        private bool IsConsumerClosed => Volatile.Read(ref _consumerClosedCounter) != 0;
+        private bool IsConsumerClosed => Volatile.Read(ref _consumerClosedFlag) != 0;
 
         /// <summary>
         /// Indicates whether the consumer shutdown has been initiated.
         /// </summary>
-        private bool IsShutdownInitiated => Volatile.Read(ref _shutdownInitiatedCounter) != 0;
+        private bool IsShutdownInitiated => Volatile.Read(ref _shutdownInitiatedFlag) != 0;
 
         /// <summary>
         /// Indicates whether a message processing failure has occurred in the current batch.
         /// </summary>
-        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _processingFailureSignaledCounter) != 0;
+        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _batchFailureFlag) != 0;
 
         /// <summary>
         /// Computes a deterministic truncated SHA-256 hexadecimal fingerprint for a Kafka topic name.
@@ -286,7 +282,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             try
             {
-                _consumer.Commit(normalizedOffsets);
+                _kafkaConsumer.Commit(normalizedOffsets);
             }
             catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
             {
@@ -332,7 +328,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         return;
                     }
 
-                    var contiguousOffsets = _lastCompletedBatchContext is not null ? ComputeContiguousCommitOffsets(_lastCompletedBatchContext) : [];
+                    var contiguousOffsets = _lastProcessedBatch is not null ? ComputeContiguousCommitOffsets(_lastProcessedBatch) : [];
                     var toCommit = contiguousOffsets
                         .Where(o => partitions.Any(p => p.TopicPartition.Equals(o.TopicPartition)))
                         .ToList();
@@ -341,7 +337,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     {
                         try
                         {
-                            _consumer.Commit(toCommit);
+                            _kafkaConsumer.Commit(toCommit);
                         }
                         catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
                         {
@@ -372,8 +368,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </returns>
         private KafkaBatchState PollConsumeResults(CancellationToken cancellationToken)
         {
-            var deadlineTickMs = Environment.TickCount64 + _maxPollDurationMs;
-            var polledConsumeResults = new List<ConsumeResult<string, string>>(_polledConsumeResultsSize);
+            var deadlineTickMs = Environment.TickCount64 + _batchPollTimeoutMs;
+            var polledConsumeResults = new List<ConsumeResult<string, string>>(_maxBatchSize);
 
             while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
             {
@@ -383,14 +379,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     break;
                 }
 
-                if (polledConsumeResults.Count >= _polledConsumeResultsSize)
+                if (polledConsumeResults.Count >= _maxBatchSize)
                 {
                     break;
                 }
 
                 try
                 {
-                    var consumeResult = _consumer.Consume(TimeSpan.FromMilliseconds(remainingMs));
+                    var consumeResult = _kafkaConsumer.Consume(TimeSpan.FromMilliseconds(remainingMs));
                     if (consumeResult is null)
                     {
                         break;
@@ -414,12 +410,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <summary>
         /// Atomically signals that the consumer has been closed.
         /// </summary>
-        private void SignalConsumerClosed() => Interlocked.Exchange(ref _consumerClosedCounter, 1);
+        private void SignalConsumerClosed() => Interlocked.Exchange(ref _consumerClosedFlag, 1);
 
         /// <summary>
         /// Atomically signals that consumer shutdown has been initiated.
         /// </summary>
-        private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _shutdownInitiatedCounter, 1);
+        private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _shutdownInitiatedFlag, 1);
 
         /// <summary>
         /// Computes per-partition commit offsets by determining the largest contiguous
@@ -483,12 +479,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <summary>
         /// Atomically signals that a message processing failure has occurred in the current batch.
         /// </summary>
-        private void SignalMessageProcessingFailure() => Interlocked.Exchange(ref _processingFailureSignaledCounter, 1);
+        private void SignalMessageProcessingFailure() => Interlocked.Exchange(ref _batchFailureFlag, 1);
 
         /// <summary>
         /// Atomically clears the message processing failure signal before handling a new batch.
         /// </summary>
-        private void ResetMessageProcessingFailureSignal() => Interlocked.Exchange(ref _processingFailureSignaledCounter, 0);
+        private void ResetMessageProcessingFailureSignal() => Interlocked.Exchange(ref _batchFailureFlag, 0);
 
         /// <summary>
         /// Launches processing tasks using Parallel.ForEachAsync for efficient concurrent processing with built-in resource management.
@@ -519,7 +515,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             var parallelOptions = new ParallelOptions
             {
                 CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = _polledConsumeResultsSize
+                MaxDegreeOfParallelism = _maxBatchSize
             };
 
             var successfulOffsets = new ConcurrentBag<TopicPartitionOffset>();
@@ -584,7 +580,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 await processMessageFunc(consumeResult.Message.Value);
 
-                _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
+                _messagesProcessedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
                 return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
             }
@@ -601,7 +597,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     await retryMessageFunc(consumeResult.Message.Value);
 
-                    _retriedSucceededCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
+                    _retrySuccessCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
                     return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
                 }
@@ -609,7 +605,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 {
                     _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, consumeResult.Offset);
 
-                    _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
+                    _retryFailureCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
                     SignalMessageProcessingFailure();
 

@@ -84,7 +84,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             _consumer.Subscribe(_topicName);
 
-            _logger.LogInformation("// {Class} // Subscribed to topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
+            _logger.LogInformation("// {Class} // subscribed to topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
 
             return base.StartAsync(cancellationToken);
         }
@@ -95,6 +95,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             _isShutdownInitiated = true;
 
             _consumer.Unsubscribe();
+
+            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
 
             while (!cancellationToken.IsCancellationRequested)
             {

@@ -71,7 +71,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 SignalConsumerClosed();
 
                 _consumer.Dispose();
-                _cancellationTokenSource.Dispose();
+
+                if (_cancellationTokenSource is not null)
+                {
+                    _cancellationTokenSource.Dispose();
+                }
 
                 base.Dispose();
             }

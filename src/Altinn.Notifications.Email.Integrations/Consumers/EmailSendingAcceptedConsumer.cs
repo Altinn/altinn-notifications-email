@@ -40,7 +40,7 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
     /// <inheritdoc/>
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        return ConsumeMessage(ConsumeOperation, RetryOperation, stoppingToken);
+        return ConsumeMessageAsync(ConsumeOperation, RetryOperation, stoppingToken);
     }
 
     private async Task ConsumeOperation(string message)

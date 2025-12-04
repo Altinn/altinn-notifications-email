@@ -24,8 +24,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly ILogger<KafkaConsumerBase> _logger;
         private readonly IConsumer<string, string> _consumer;
 
-        private bool _isShutdownInitiated;
-        private bool _isProcessingFailureSignaled;
+        private int _isShutdownInitiated;
+        private int _isProcessingFailureSignaled;
 
         private readonly int _maxPollDurationMs = 100;
         private readonly int _polledConsumeResultsSize = 50;
@@ -202,7 +202,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <summary>
         /// Indicates whether the consumer shutdown has been initiated.
         /// </summary>
-        private bool IsShutdownInitiated => Volatile.Read(ref _isShutdownInitiated);
+        private bool IsShutdownInitiated => Volatile.Read(ref _isShutdownInitiated) != 0;
 
         /// <summary>
         /// Creates and configures a Kafka consumer instance.
@@ -339,12 +339,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <summary>
         /// Atomically signals that consumer shutdown has been initiated.
         /// </summary>
-        private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _isShutdownInitiated, true);
+        private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _isShutdownInitiated, 1);
 
         /// <summary>
         /// Indicates whether a message processing failure has occurred in the current batch.
         /// </summary>
-        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _isProcessingFailureSignaled);
+        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _isProcessingFailureSignaled) != 0;
 
         /// <summary>
         /// Computes per-partition commit offsets by determining the largest contiguous
@@ -409,12 +409,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <summary>
         /// Atomically signals that a message processing failure has occurred in the current batch.
         /// </summary>
-        private void SignalMessageProcessingFailure() => Interlocked.Exchange(ref _isProcessingFailureSignaled, true);
+        private void SignalMessageProcessingFailure() => Interlocked.Exchange(ref _isProcessingFailureSignaled, 1);
 
         /// <summary>
         /// Atomically clears the message processing failure signal before handling a new batch.
         /// </summary>
-        private void ResetMessageProcessingFailureSignal() => Interlocked.Exchange(ref _isProcessingFailureSignaled, false);
+        private void ResetMessageProcessingFailureSignal() => Interlocked.Exchange(ref _isProcessingFailureSignaled, 0);
 
         /// <summary>
         /// Launches processing tasks for the polled consume results, awaits completion, and collects successful next offsets.

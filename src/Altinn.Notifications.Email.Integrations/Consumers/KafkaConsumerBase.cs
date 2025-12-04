@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Diagnostics.Metrics;
+﻿using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -297,13 +296,13 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </returns>
         private BatchProcessingContext PollConsumeResults(CancellationToken cancellationToken)
         {
-            var batchPollingDeadline = DateTime.UtcNow.AddMilliseconds(_maxPollDurationMs);
+            var deadlineTickMs = Environment.TickCount64 + _maxPollDurationMs;
             var polledConsumeResults = new List<ConsumeResult<string, string>>(_polledConsumeResultsSize);
 
             while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
             {
-                var remainingPollingTimeSpan = batchPollingDeadline - DateTime.UtcNow;
-                if (remainingPollingTimeSpan <= TimeSpan.Zero)
+                var remainingMs = (int)Math.Max(0, deadlineTickMs - Environment.TickCount64);
+                if (remainingMs <= 0)
                 {
                     break;
                 }
@@ -315,7 +314,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 try
                 {
-                    var consumeResult = _consumer.Consume(remainingPollingTimeSpan);
+                    var consumeResult = _consumer.Consume(TimeSpan.FromMilliseconds(remainingMs));
                     if (consumeResult is null)
                     {
                         break;

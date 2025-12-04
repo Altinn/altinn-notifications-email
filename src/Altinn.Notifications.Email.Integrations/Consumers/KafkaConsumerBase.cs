@@ -105,7 +105,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             await base.StopAsync(cancellationToken);
 
-            var lastBatchSafeOffsets = _lastProcessedBatch != null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
+            var lastBatchSafeOffsets = _lastProcessedBatch != null ? CalculateContiguousCommitOffsets(_lastProcessedBatch) : [];
             if (lastBatchSafeOffsets.Count > 0 && !IsConsumerClosed)
             {
                 try
@@ -174,7 +174,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 _lastProcessedBatch = batchState;
 
-                var safeCommitOffsets = GetSafeCommitOffsets(batchState);
+                var safeCommitOffsets = CalculateContiguousCommitOffsets(batchState);
                 if (safeCommitOffsets.Count > 0)
                 {
                     CommitNormalizedOffsets(safeCommitOffsets);
@@ -289,7 +289,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         return;
                     }
 
-                    var lastBatchSafeOffsets = _lastProcessedBatch != null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
+                    var lastBatchSafeOffsets = _lastProcessedBatch != null ? CalculateContiguousCommitOffsets(_lastProcessedBatch) : [];
                     var revokedPartitionOffsets = lastBatchSafeOffsets
                     .Where(offsetEntry => partitions.Any(revokedPartition => revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
                     .ToList();
@@ -424,18 +424,31 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private void SignalShutdownStarted() => Interlocked.Exchange(ref _shutdownStartedFlag, 1);
 
         /// <summary>
-        /// Determines the highest safe commit offset for each partition by finding
-        /// the largest contiguous sequence of successfully processed messages from the start of the batch.
+        /// Atomically signals that a batch processing failure has occurred.
+        /// </summary>
+        private void SignalBatchProcessingFailure() => Interlocked.Exchange(ref _batchFailureFlag, 1);
+
+        /// <summary>
+        /// Atomically clears the batch processing failure signal before handling a new batch.
+        /// </summary>
+        private void ResetBatchProcessingFailureSignal() => Interlocked.Exchange(ref _batchFailureFlag, 0);
+
+        /// <summary>
+        /// Calculates the highest contiguous commit offsets for each partition by identifying the longest sequence 
+        /// of successfully processed messages starting from the earliest polled offset in the batch.
+        /// Ensures Kafka offset commit safety by preventing gaps in message acknowledgment that could lead to message loss or duplication.
         /// </summary>
         /// <param name="batchState">
-        /// The batch state containing polled messages and their processing results.
+        /// The batch processing state containing both the original polled messages and the successfully processed commit-ready offsets.
+        /// Used to correlate polling order with processing success to determine safe commit boundaries.
         /// </param>
         /// <returns>
-        /// Safe-to-commit offsets for each partition. Only includes partitions where a contiguous 
-        /// sequence of processed messages exists from the earliest polled offset. Returns an empty 
-        /// list if no safe commit points can be established.
+        /// A list of <see cref="TopicPartitionOffset"/> representing the highest safe commit position for each partition.
+        /// Only includes partitions where at least one message from the beginning of the batch was successfully processed.
+        /// Returns an empty list when no contiguous processing success can be established from batch start for any partition.
+        /// Each offset represents the next position to read from (original message offset + 1) following Kafka commit semantics.
         /// </returns>
-        private static List<TopicPartitionOffset> GetSafeCommitOffsets(KafkaBatchState batchState)
+        private static List<TopicPartitionOffset> CalculateContiguousCommitOffsets(KafkaBatchState batchState)
         {
             var safeOffsetsToCommit = new List<TopicPartitionOffset>();
 
@@ -481,16 +494,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             return safeOffsetsToCommit;
         }
-
-        /// <summary>
-        /// Atomically signals that a batch processing failure has occurred.
-        /// </summary>
-        private void SignalBatchProcessingFailure() => Interlocked.Exchange(ref _batchFailureFlag, 1);
-
-        /// <summary>
-        /// Atomically clears the batch processing failure signal before handling a new batch.
-        /// </summary>
-        private void ResetBatchProcessingFailureSignal() => Interlocked.Exchange(ref _batchFailureFlag, 0);
 
         /// <summary>
         /// Processes a batch of Kafka messages concurrently using parallel execution with built-in retry logic and error handling.

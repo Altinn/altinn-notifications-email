@@ -28,7 +28,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
         private readonly int _maxPollDurationMs = 100;
         private readonly int _polledConsumeResultsSize = 100;
-        private readonly SemaphoreSlim _processingConcurrencySemaphore;
+
         private readonly ConcurrentDictionary<TopicPartition, long> _latestProcessedOffsetByPartition = new();
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
@@ -48,8 +48,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             var configuration = BuildConfiguration(settings);
             _consumer = BuildConsumer(configuration);
-
-            _processingConcurrencySemaphore = new SemaphoreSlim(_polledConsumeResultsSize, _polledConsumeResultsSize);
         }
 
         /// <inheritdoc/>
@@ -66,7 +64,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             finally
             {
                 _consumer.Dispose();
-                _processingConcurrencySemaphore.Dispose();
                 base.Dispose();
             }
         }
@@ -177,7 +174,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
 
             ReadOnlySpan<byte> topicNameBytes = Encoding.UTF8.GetBytes(topicName);
-            
+
             byte[] digest = SHA256.HashData(topicNameBytes);
             string hex = Convert.ToHexString(digest.AsSpan(0, 8));
 
@@ -370,7 +367,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             return new BatchProcessingContext
             {
-                PolledConsumeResults = polledConsumeResults
+                PolledConsumeResults = [.. polledConsumeResults]
             };
         }
 
@@ -544,13 +541,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </returns>
         private async Task<TopicPartitionOffset?> ProcessSingleMessageAsync(ConsumeResult<string, string> consumeResult, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
             try
             {
                 if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
                 {
-                    _processingConcurrencySemaphore.Release();
-
                     return null;
                 }
 
@@ -587,10 +581,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     return null;
                 }
-            }
-            finally
-            {
-                _processingConcurrencySemaphore.Release();
             }
         }
     }

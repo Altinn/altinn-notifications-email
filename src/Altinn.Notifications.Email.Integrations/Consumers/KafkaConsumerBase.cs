@@ -491,7 +491,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     await processMessageFunc(consumeResult.Message.Value);
 
-                    _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+                    _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
 
                     return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
                 }
@@ -508,7 +508,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                         await retryMessageFunc(consumeResult.Message.Value);
 
-                        _retriedSucceededCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+                        _retriedSucceededCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
 
                         return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
                     }
@@ -516,7 +516,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     {
                         _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, consumeResult.Offset);
 
-                        _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
+                        _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
 
                         SignalMessageProcessingFailure();
 

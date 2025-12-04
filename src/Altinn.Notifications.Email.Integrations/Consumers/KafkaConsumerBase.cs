@@ -224,6 +224,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
+                    // Prevent launching new tasks in the current batch during rebalance.
+                    SignalMessageProcessingFailure();
+
                     _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
                 })
                 .SetPartitionsAssignedHandler((_, partitions) =>

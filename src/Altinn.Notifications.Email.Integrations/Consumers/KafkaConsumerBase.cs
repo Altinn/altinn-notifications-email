@@ -105,7 +105,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             await base.StopAsync(cancellationToken);
 
-            var contiguousOffsets = _lastProcessedBatch is not null ? ComputeContiguousCommitOffsets(_lastProcessedBatch) : [];
+            var contiguousOffsets = _lastProcessedBatch is not null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
             if (contiguousOffsets.Count > 0 && !IsConsumerClosed)
             {
                 try
@@ -171,7 +171,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 _lastProcessedBatch = KafkaBatchState;
 
-                var contiguousCommitOffsets = ComputeContiguousCommitOffsets(KafkaBatchState);
+                var contiguousCommitOffsets = GetSafeCommitOffsets(KafkaBatchState);
                 if (contiguousCommitOffsets.Count > 0)
                 {
                     CommitOffsets(contiguousCommitOffsets);
@@ -328,7 +328,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         return;
                     }
 
-                    var contiguousOffsets = _lastProcessedBatch is not null ? ComputeContiguousCommitOffsets(_lastProcessedBatch) : [];
+                    var contiguousOffsets = _lastProcessedBatch is not null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
                     var toCommit = contiguousOffsets
                         .Where(o => partitions.Any(p => p.TopicPartition.Equals(o.TopicPartition)))
                         .ToList();
@@ -418,40 +418,40 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _shutdownInitiatedFlag, 1);
 
         /// <summary>
-        /// Computes per-partition commit offsets by determining the largest contiguous
-        /// sequence of successfully processed messages from the earliest offset in each partition within the launched batch.
+        /// Determines the highest safe commit offset for each partition by finding
+        /// the largest contiguous sequence of successfully processed messages from the start of the batch.
         /// </summary>
-        /// <param name="batchContext">
-        /// The batch context providing launched consume results and the successful next-offsets (offset + 1).
+        /// <param name="batchState">
+        /// The batch state containing polled messages and their processing results.
         /// </param>
         /// <returns>
-        /// A list of <see cref="TopicPartitionOffset"/> values that are safe to commit to Kafka,
-        /// representing the highest contiguous offset that can be committed for each partition without gaps.
-        /// Returns an empty list if no contiguous sequences can be established.
+        /// Safe-to-commit offsets for each partition. Only includes partitions where a contiguous 
+        /// sequence of processed messages exists from the earliest polled offset. Returns an empty 
+        /// list if no safe commit points can be established.
         /// </returns>
-        private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(KafkaBatchState batchContext)
+        private static List<TopicPartitionOffset> GetSafeCommitOffsets(KafkaBatchState batchState)
         {
-            var batchByTopicPartition = batchContext.PolledConsumeResults
-               .GroupBy(e => e.TopicPartition)
-               .ToDictionary(e => e.Key, e => e.Select(x => x.Offset.Value).OrderBy(x => x).ToList());
+            var safeOffsetsToCommit = new List<TopicPartitionOffset>();
 
-            var successesByTopicPartition = batchContext.CommitReadyOffsets
-                .GroupBy(e => e.TopicPartition)
-                .ToDictionary(e => e.Key, e => new HashSet<long>(e.Select(s => s.Offset.Value)));
+            var polledOffsetsByPartition = batchState.PolledConsumeResults
+                .GroupBy(cr => cr.TopicPartition)
+                .ToDictionary(grp => grp.Key, grp => grp.Select(cr => cr.Offset.Value).OrderBy(offset => offset).ToList());
 
-            var topicPartitionOffsetsToCommit = new List<TopicPartitionOffset>();
+            var processedOffsetsByPartition = batchState.CommitReadyOffsets
+                .GroupBy(tpo => tpo.TopicPartition)
+                .ToDictionary(grp => grp.Key, grp => new HashSet<long>(grp.Select(tpo => tpo.Offset.Value)));
 
-            foreach (var kvp in batchByTopicPartition)
+            foreach (var partition in polledOffsetsByPartition)
             {
-                var topicPartition = kvp.Key;
-                var orderedOffsets = kvp.Value;
+                var topicPartition = partition.Key;
+                var orderedOffsets = partition.Value;
 
-                if (!successesByTopicPartition.TryGetValue(topicPartition, out var successSet) || successSet.Count == 0)
+                if (!processedOffsetsByPartition.TryGetValue(topicPartition, out var successSet) || successSet.Count == 0)
                 {
                     continue;
                 }
 
-                long? lastContiguousNext = null;
+                long? safeCommitOffset = null;
 
                 foreach (var offset in orderedOffsets)
                 {
@@ -459,7 +459,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     if (successSet.Contains(nextPosition))
                     {
-                        lastContiguousNext = nextPosition;
+                        safeCommitOffset = nextPosition;
                     }
                     else
                     {
@@ -467,13 +467,13 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     }
                 }
 
-                if (lastContiguousNext.HasValue)
+                if (safeCommitOffset.HasValue)
                 {
-                    topicPartitionOffsetsToCommit.Add(new TopicPartitionOffset(topicPartition, new Offset(lastContiguousNext.Value)));
+                    safeOffsetsToCommit.Add(new TopicPartitionOffset(topicPartition, new Offset(safeCommitOffset.Value)));
                 }
             }
 
-            return topicPartitionOffsetsToCommit;
+            return safeOffsetsToCommit;
         }
 
         /// <summary>

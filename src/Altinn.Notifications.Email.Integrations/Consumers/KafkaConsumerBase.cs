@@ -83,7 +83,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             _consumer.Unsubscribe();
 
-            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
+            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_topicName));
 
             await base.StopAsync(cancellationToken);
         }
@@ -105,7 +105,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </param>
         protected async Task ConsumeMessage(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            while (cancellationToken.IsCancellationRequested && IsShutdownInitiated)
+            while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
             {
                 ResetMessageProcessingFailureSignal();
 
@@ -196,6 +196,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
+        /// Indicates whether the consumer shutdown has been initiated.
+        /// </summary>
+        private bool IsShutdownInitiated => Volatile.Read(ref _isShutdownInitiated);
+
+        /// <summary>
         /// Creates and configures a Kafka consumer instance.
         /// </summary>
         /// <param name="consumerConfig">The <see cref="ConsumerConfig"/> used to build the consumer.</param>
@@ -279,16 +284,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Indicates whether the consumer shutdown has been initiated.
-        /// </summary>
-        private bool IsShutdownInitiated => Volatile.Read(ref _isShutdownInitiated);
-
-        /// <summary>
-        /// Indicates whether a message processing failure has occurred in the current batch.
-        /// </summary>
-        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _isProcessingFailureSignaled);
-
-        /// <summary>
         /// Polls the Kafka consumer for new messages until either the time budget or the per-batch item cap is reached, or shutdown/cancellation is observed.
         /// </summary>
         /// <param name="cancellationToken">Token observed for cooperative cancellation and shutdown.</param>
@@ -341,6 +336,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// Atomically signals that consumer shutdown has been initiated.
         /// </summary>
         private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _isShutdownInitiated, true);
+
+        /// <summary>
+        /// Indicates whether a message processing failure has occurred in the current batch.
+        /// </summary>
+        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _isProcessingFailureSignaled);
 
         /// <summary>
         /// Computes per-partition commit offsets by determining the largest contiguous

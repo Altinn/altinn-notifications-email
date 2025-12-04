@@ -21,30 +21,17 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
     /// </summary>
     public abstract class KafkaConsumerBase : BackgroundService
     {
-        private int _failureFlag = 0;
         private readonly string _topicName;
-        private volatile bool _isShutdownInitiated;
         private readonly ILogger<KafkaConsumerBase> _logger;
         private readonly IConsumer<string, string> _consumer;
 
-        private readonly int _maxMessagesPerBatch = 50;
-        private readonly int _messagesBatchPollTimeoutMs = 100;
-        private readonly int _maxConcurrentProcessingTasks = 50;
+        private bool _isShutdownInitiated;
+        private bool _isProcessingFailureSignaled;
 
-        private readonly int _progressiveCommitIntervalMs = 250;
-        private readonly int _progressiveCommitMinNewSuccesses = 10;
+        private readonly int _maxPollDurationMs = 100;
+        private readonly int _polledConsumeResultsSize = 50;
 
         private volatile IReadOnlyList<Task> _currentBatchTasks = [];
-        private readonly SemaphoreSlim _processingConcurrencySemaphore;
-
-        private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
-        private static readonly Counter<int> _failedCounter = _meter.CreateCounter<int>("kafka.consumer.failed");
-        private static readonly Counter<int> _consumedCounter = _meter.CreateCounter<int>("kafka.consumer.consumed");
-        private static readonly Counter<int> _committedCounter = _meter.CreateCounter<int>("kafka.consumer.committed");
-        private static readonly Counter<int> _processedCounter = _meter.CreateCounter<int>("kafka.consumer.processed");
-        private static readonly Counter<int> _retriedFailedCounter = _meter.CreateCounter<int>("kafka.consumer.retried.failed");
-        private static readonly Counter<int> _retriedSucceededCounter = _meter.CreateCounter<int>("kafka.consumer.retried.succeeded");
-        private static readonly Histogram<double> _batchLatencyMs = _meter.CreateHistogram<double>("kafka.consumer.batch.latency.ms");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="KafkaConsumerBase"/> class.
@@ -56,8 +43,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             var configuration = BuildConfiguration(settings);
             _consumer = BuildConsumer(configuration);
-
-            _processingConcurrencySemaphore = new SemaphoreSlim(_maxConcurrentProcessingTasks, _maxConcurrentProcessingTasks);
         }
 
         /// <inheritdoc/>
@@ -74,7 +59,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             finally
             {
                 _consumer.Dispose();
-                _processingConcurrencySemaphore.Dispose();
                 base.Dispose();
             }
         }
@@ -92,7 +76,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <inheritdoc/>
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
-            _isShutdownInitiated = true;
+            IsShutdownInitiated = true;
 
             _consumer.Unsubscribe();
 
@@ -129,45 +113,87 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         protected override abstract Task ExecuteAsync(CancellationToken stoppingToken);
 
         /// <summary>
-        /// Consumes messages from the Kafka topic in batches, launching up to a bounded number of concurrent processors.
+        /// Consumes messages from the configured Kafka topic using batch polling and bounded parallel processing.
         /// </summary>
-        /// <param name="processMessageFunc">A function that processes a single message value.</param>
-        /// <param name="retryMessageFunc">A function that retries processing a single message value when the initial processing fails.</param>
-        /// <param name="cancellationToken">A cancellation token used to observe shutdown requests and coordinate graceful termination of processing tasks.</param>
+        /// <param name="processMessageFunc">
+        /// Delegate that processes a single message value. Exceptions trigger a retry via <paramref name="retryMessageFunc"/>.
+        /// </param>
+        /// <param name="retryMessageFunc">
+        /// Delegate invoked when <paramref name="processMessageFunc"/> fails. If it also fails, the batch stops launching new processing tasks.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// Token observed for cooperative cancellation. When signaled, polling and new task launches stop and in-flight tasks are awaited.
+        /// </param>
         protected async Task ConsumeMessage(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
+            while (cancellationToken.IsCancellationRequested && IsShutdownInitiated)
             {
-                var batchStopwatch = Stopwatch.StartNew();
+                Interlocked.Exchange(ref _isProcessingFailureSignaled, false);
 
-                var batchProcessingContext = PollConsumeResults(_maxMessagesPerBatch, _messagesBatchPollTimeoutMs, cancellationToken);
+                var batchProcessingStopwatch = Stopwatch.StartNew();
+
+                var batchProcessingContext = PollConsumeResults(cancellationToken);
                 if (batchProcessingContext.PolledConsumeResults.Count == 0)
                 {
+                    batchProcessingStopwatch.Stop();
+
                     await Task.Delay(10, cancellationToken);
+
                     continue;
                 }
 
-                _consumedCounter.Add(batchProcessingContext.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                try
+                if (cancellationToken.IsCancellationRequested && IsShutdownInitiated)
                 {
-                    batchProcessingContext = await ProcessPolledConsumeResults(batchProcessingContext, processMessageFunc, retryMessageFunc, cancellationToken);
+                    batchProcessingStopwatch.Stop();
 
-                    await ContiguousCommitCompletedConsumingTasks(batchProcessingContext, cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
                     break;
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "// {Class} // Unexpected error in batch processing loop", GetType().Name);
-                }
-                finally
-                {
-                    batchStopwatch.Stop();
 
-                    _batchLatencyMs.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _topicName));
+                var processingTaskFactories = new List<Task<TopicPartitionOffset?>>(batchProcessingContext.PolledConsumeResults.Count);
+
+                foreach (var consumeResult in batchProcessingContext.PolledConsumeResults)
+                {
+                    var messageProcessingTaskFactory = CreateMessageProcessingTaskFactory(consumeResult, processMessageFunc, retryMessageFunc, cancellationToken);
+
+                    processingTaskFactories.Add(messageProcessingTaskFactory());
+                }
+
+                if (cancellationToken.IsCancellationRequested && IsShutdownInitiated)
+                {
+                    batchProcessingStopwatch.Stop();
+
+                    break;
+                }
+
+                await Task.WhenAll(processingTaskFactories);
+
+                var successfulNextOffsets = new ConcurrentBag<TopicPartitionOffset>();
+                foreach (var processingTask in processingTaskFactories)
+                {
+                    var result = await processingTask;
+
+                    if (result is not null)
+                    {
+                        successfulNextOffsets.Add(result);
+                    }
+                }
+
+                batchProcessingContext = batchProcessingContext with
+                {
+                    SuccessfulNextOffsets = successfulNextOffsets
+                };
+
+                // Update context with all polled results and the successful ones
+                var finalContext = batchProcessingContext with
+                {
+                    SuccessfulNextOffsets = successfulNextOffsets
+                };
+
+                // Compute and commit the highest contiguous offsets
+                var offsetsToCommit = ComputeContiguousCommitOffsets(finalContext);
+                if (offsetsToCommit.Count > 0)
+                {
+                    CommitNormalizedOffsets(offsetsToCommit);
                 }
             }
         }
@@ -240,16 +266,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Indicates whether the current batch has encountered a failure.
-        /// </summary>
-        private bool HasFailed => Volatile.Read(ref _failureFlag) == 1;
-
-        /// <summary>
-        /// Atomically signals a failure for the current batch, preventing further task launches.
-        /// </summary>
-        private void SignalFailure() => Interlocked.Exchange(ref _failureFlag, 1);
-
-        /// <summary>
         /// Creates and configures a Kafka consumer instance.
         /// </summary>
         /// <param name="consumerConfig">The <see cref="ConsumerConfig"/> used to build the consumer.</param>
@@ -296,7 +312,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </param>
         private void CommitNormalizedOffsets(IEnumerable<TopicPartitionOffset> offsets)
         {
-            if (offsets is null || _isShutdownInitiated)
+            if (offsets is null || IsShutdownInitiated)
             {
                 return;
             }
@@ -318,8 +334,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             try
             {
                 _consumer.Commit(normalizedOffsets);
-
-                _committedCounter.Add(normalizedOffsets.Count, KeyValuePair.Create<string, object?>("topic", _topicName));
             }
             catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
             {
@@ -346,16 +360,13 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </returns>
         private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(BatchProcessingContext batchContext)
         {
-            var launchedBatch = batchContext.ConsumeResultsForLaunchedTasks;
-            var successfulOffsets = batchContext.SuccessfulNextOffsets;
-
             var commitOffsets = new List<TopicPartitionOffset>();
 
-            var batchByTopicPartition = launchedBatch
+            var batchByTopicPartition = batchContext.PolledConsumeResults
                 .GroupBy(e => e.TopicPartition)
                 .ToDictionary(e => e.Key, e => e.Select(x => x.Offset.Value).OrderBy(x => x).ToList());
 
-            var successesByTopicPartition = successfulOffsets
+            var successesByTopicPartition = batchContext.SuccessfulNextOffsets
                 .GroupBy(e => e.TopicPartition)
                 .ToDictionary(e => e.Key, e => new HashSet<long>(e.Select(s => s.Offset.Value)));
 
@@ -395,36 +406,34 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Polls consume results from the underlying Kafka consumer until one of the stopping conditions is met.
+        /// Polls the Kafka consumer for new messages until either the time budget or the per-batch item cap is reached, or shutdown/cancellation is observed.
         /// </summary>
-        /// <param name="maxConsumeResults">The maximum number of consume results to return.</param>
-        /// <param name="pollTimeoutMs">The total maximum time (in milliseconds) spent polling.</param>
-        /// <param name="cancellationToken">Token observed for cooperative cancellation.</param>
+        /// <param name="cancellationToken">Token observed for cooperative cancellation and shutdown.</param>
         /// <returns>
-        /// A <see cref="BatchProcessingContext"/> containing:
-        /// - <see cref="BatchProcessingContext.PolledConsumeResults"/>: The consecutively polled <see cref="ConsumeResult{TKey,TValue}"/> instances.
+        /// A <see cref="BatchProcessingContext"/> with <see cref="BatchProcessingContext.PolledConsumeResults"/>
+        /// containing the consecutively polled <see cref="ConsumeResult{TKey, TValue}"/> items. The list may be empty.
         /// </returns>
-        private BatchProcessingContext PollConsumeResults(int maxConsumeResults, int pollTimeoutMs, CancellationToken cancellationToken)
+        private BatchProcessingContext PollConsumeResults(CancellationToken cancellationToken)
         {
-            if (maxConsumeResults <= 0 || pollTimeoutMs <= 0 || cancellationToken.IsCancellationRequested)
-            {
-                return new BatchProcessingContext();
-            }
+            var batchPollingDeadline = DateTime.UtcNow.AddMilliseconds(_maxPollDurationMs);
+            var polledConsumeResults = new List<ConsumeResult<string, string>>(_polledConsumeResultsSize);
 
-            var pollDeadline = DateTime.UtcNow.AddMilliseconds(pollTimeoutMs);
-            var polledConsumeResults = new List<ConsumeResult<string, string>>(maxConsumeResults);
-
-            while (polledConsumeResults.Count < maxConsumeResults && !cancellationToken.IsCancellationRequested)
+            while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
             {
-                var remainingTimeSpan = pollDeadline - DateTime.UtcNow;
-                if (remainingTimeSpan <= TimeSpan.Zero)
+                var remainingPollingTimeSpan = batchPollingDeadline - DateTime.UtcNow;
+                if (remainingPollingTimeSpan <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                if (polledConsumeResults.Count >= _polledConsumeResultsSize)
                 {
                     break;
                 }
 
                 try
                 {
-                    var consumeResult = _consumer.Consume(remainingTimeSpan);
+                    var consumeResult = _consumer.Consume(remainingPollingTimeSpan);
                     if (consumeResult is null)
                     {
                         break;
@@ -434,11 +443,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 }
                 catch (ConsumeException ex)
                 {
-                    _logger.LogError(ex, "// {Class} // Consume exception during polling", GetType().Name);
-                    break;
-                }
-                catch (OperationCanceledException)
-                {
+                    _logger.LogError(ex, "// {Class} // Exception during polling", GetType().Name);
                     break;
                 }
             }
@@ -450,216 +455,77 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Awaits completion of in-flight processing tasks and periodically commits advancing,
-        /// contiguous successes from the current batch. Commits only offsets that advance per partition,
-        /// preserving the "contiguous only" rule to avoid gaps.
+        /// Indicates whether this consumer instance has initiated shutdown.
         /// </summary>
-        /// <param name="batchProcessingContext">
-        /// The batch context providing launched consume results and the successful next-offsets (offset + 1).
-        /// </param>
-        /// <param name="cancellationToken">
-        /// Token used to observe shutdown requests and cancel waiting operations.
-        /// </param>
-        private async Task ContiguousCommitCompletedConsumingTasks(BatchProcessingContext batchProcessingContext, CancellationToken cancellationToken)
+        /// <value>
+        /// <c>true</c> if shutdown has been initiated; otherwise, <c>false</c>.
+        /// </value>
+        private bool IsShutdownInitiated
         {
-            if (batchProcessingContext.ConsumeResultsForLaunchedTasks.Count == 0)
+            get => Volatile.Read(ref _isShutdownInitiated);
+            set => Interlocked.Exchange(ref _isShutdownInitiated, value);
+        }
+
+        /// <summary>
+        /// Indicates whether a message processing failure has been signaled from any processing tasks.
+        /// </summary>
+        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _isProcessingFailureSignaled);
+
+        /// <summary>
+        /// Atomically signals a message processing failure.
+        /// </summary>
+        private void SignalMessageProcessingFailure() => Interlocked.Exchange(ref _isProcessingFailureSignaled, true);
+
+        /// <summary>
+        /// Builds a deferred-start factory for processing a single Kafka message.
+        /// </summary>
+        /// <remarks>
+        /// - The returned delegate, when invoked, executes <paramref name="processMessageFunc"/>; on failure, it executes <paramref name="retryMessageFunc"/>.
+        /// - Returns <c>true</c> when the message is handled successfully (either initial processing or retry); otherwise <c>false</c>.
+        /// - Honors batch-level stop conditions: if shutdown is initiated or a processing failure has been signaled, the task short-circuits and returns <c>false</c>.
+        /// </remarks>
+        /// <param name="consumeResult">The Kafka message to process.</param>
+        /// <param name="processMessageFunc">Delegate that performs the primary handling of the message.</param>
+        /// <param name="retryMessageFunc">Delegate invoked to retry handling the message when the primary handling fails.</param>
+        /// <param name="cancellationToken">Token observed for cooperative cancellation prior to starting or during execution.</param>
+        /// <returns>
+        /// A factory delegate that, when invoked, starts processing and returns a <see cref="Task{Boolean}"/>: 
+        /// <c>true</c> on successful handling; <c>false</c> if both processing and retry fail or launch is short-circuited.
+        /// </returns>
+        private Func<Task<TopicPartitionOffset?>> CreateMessageProcessingTaskFactory(ConsumeResult<string, string> consumeResult, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
+        {
+            return async () =>
             {
-                return;
-            }
-
-            int lastObservedSuccessCount = 0;
-            var commitStopwatch = Stopwatch.StartNew();
-            var tasksToAwait = batchProcessingContext.LaunchedProcessingTasks;
-            var lastCommittedByPartition = new Dictionary<TopicPartition, long>();
-
-            while (!cancellationToken.IsCancellationRequested && !_isShutdownInitiated)
-            {
-                if (tasksToAwait.Count > 0 && tasksToAwait.All(e => e.IsCompleted))
-                {
-                    CommitContiguousAdvancingOffsets(batchProcessingContext, lastCommittedByPartition);
-
-                    break;
-                }
-
-                int successCount = batchProcessingContext.SuccessfulNextOffsets.Count;
-                bool intervalReached = commitStopwatch.ElapsedMilliseconds >= _progressiveCommitIntervalMs;
-                bool thresholdReached = successCount - lastObservedSuccessCount >= _progressiveCommitMinNewSuccesses;
-
-                if (thresholdReached || intervalReached)
-                {
-                    CommitContiguousAdvancingOffsets(batchProcessingContext, lastCommittedByPartition);
-
-                    lastObservedSuccessCount = successCount;
-
-                    commitStopwatch.Restart();
-                }
-
                 try
                 {
-                    if (tasksToAwait.Count > 0)
+                    if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
                     {
-                        await Task.WhenAny(tasksToAwait.Append(Task.Delay(_progressiveCommitIntervalMs, cancellationToken)));
+                        return null;
                     }
-                    else
-                    {
-                        await Task.Delay(_progressiveCommitIntervalMs, cancellationToken);
-                    }
+
+                    await processMessageFunc(consumeResult.Message.Value);
+
+                    return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-            }
-
-            CommitContiguousAdvancingOffsets(batchProcessingContext, lastCommittedByPartition);
-
-            await Task.Yield();
-        }
-
-        /// <summary>
-        /// Commits advancing offsets derived from contiguous successes in the current batch.
-        /// </summary>
-        /// <param name="batchContext">
-        /// The batch context providing launched consume results and the successful next-offsets (offset + 1).
-        /// </param>
-        /// <param name="lastCommittedByPartition">
-        /// A map tracking the last committed next-offset per partition to avoid redundant commits.
-        /// </param>
-        private void CommitContiguousAdvancingOffsets(BatchProcessingContext batchContext, Dictionary<TopicPartition, long> lastCommittedByPartition)
-        {
-            if (batchContext is null || batchContext.SuccessfulNextOffsets.IsEmpty)
-            {
-                return;
-            }
-
-            var commitCandidates = ComputeContiguousCommitOffsets(batchContext);
-            if (commitCandidates.Count == 0)
-            {
-                return;
-            }
-
-            var advancing = new List<TopicPartitionOffset>(commitCandidates.Count);
-            foreach (var commitCandidate in commitCandidates)
-            {
-                var nextOffset = commitCandidate.Offset.Value;
-                var topicPartition = commitCandidate.TopicPartition;
-
-                if (lastCommittedByPartition.TryGetValue(topicPartition, out var lastOffset) && nextOffset <= lastOffset)
-                {
-                    continue;
-                }
-
-                advancing.Add(commitCandidate);
-                lastCommittedByPartition[topicPartition] = nextOffset;
-            }
-
-            if (advancing.Count > 0)
-            {
-                CommitNormalizedOffsets(advancing);
-            }
-        }
-
-        /// <summary>
-        /// Launches processing tasks for the polled consume results in the provided batch context.
-        /// </summary>
-        /// <param name="batchContext">The batch context containing consume results polled for this iteration.</param>
-        /// <param name="processMessageFunc">Function that processes a single message value extracted from a consume result </param>
-        /// <param name="retryMessageFunc">Function that retries processing a single message value when the initial processing fails.</param>
-        /// <param name="cancellationToken">Token used to observe shutdown requests and to cancel waiting on concurrency slots and task launches.</param>
-        /// <returns>
-        /// A <see cref="BatchProcessingContext"/> with:
-        /// - <see cref="BatchProcessingContext.ConsumeResultsForLaunchedTasks"/> containing the consume results that had processing tasks started.
-        /// - <see cref="BatchProcessingContext.SuccessfulNextOffsets"/> containing per-message next offsets (original offset + 1) for successfully processed consume results.
-        /// </returns>
-        private async Task<BatchProcessingContext> ProcessPolledConsumeResults(BatchProcessingContext batchContext, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
-        {
-            Interlocked.Exchange(ref _failureFlag, 0);
-
-            var successfulNextOffsets = new ConcurrentBag<TopicPartitionOffset>();
-            var processingTasks = new List<Task>(batchContext.PolledConsumeResults.Count);
-            var consumeResultsForLaunchedTasks = new List<ConsumeResult<string, string>>(batchContext.PolledConsumeResults.Count);
-
-            foreach (var polledConsumeResult in batchContext.PolledConsumeResults)
-            {
-                await _processingConcurrencySemaphore.WaitAsync(cancellationToken);
-
-                if (cancellationToken.IsCancellationRequested || HasFailed || _isShutdownInitiated)
-                {
-                    _processingConcurrencySemaphore.Release();
-
-                    break;
-                }
-
-                async Task ProcessingWrapper()
+                catch (Exception)
                 {
                     try
                     {
-                        if (HasFailed)
+                        if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
                         {
-                            return;
+                            return null;
                         }
 
-                        await processMessageFunc(polledConsumeResult.Message.Value);
+                        await retryMessageFunc(consumeResult.Message.Value);
 
-                        _processedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                        successfulNextOffsets.Add(new TopicPartitionOffset(polledConsumeResult.TopicPartition, polledConsumeResult.Offset + 1));
+                        return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
                     }
-                    catch (OperationCanceledException)
+                    catch (Exception)
                     {
-                        SignalFailure();
-                    }
-                    catch (Exception ex)
-                    {
-                        _failedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                        _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, polledConsumeResult.Offset);
-
-                        try
-                        {
-                            await retryMessageFunc(polledConsumeResult.Message.Value);
-
-                            _retriedSucceededCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                            successfulNextOffsets.Add(new TopicPartitionOffset(polledConsumeResult.TopicPartition, polledConsumeResult.Offset + 1));
-                        }
-                        catch (Exception retryEx)
-                        {
-                            SignalFailure();
-
-                            _retriedFailedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", _topicName));
-
-                            _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, polledConsumeResult.Offset);
-                        }
-                    }
-                    finally
-                    {
-                        try
-                        {
-                            _processingConcurrencySemaphore.Release();
-                        }
-                        catch (SemaphoreFullException ex)
-                        {
-                            _logger.LogWarning(ex, "// {Class} // Semaphore already full when releasing for offset {Offset}", GetType().Name, polledConsumeResult.Offset);
-                        }
+                        SignalMessageProcessingFailure();
+                        return null;
                     }
                 }
-
-                var processingTask = ProcessingWrapper();
-
-                processingTasks.Add(processingTask);
-                consumeResultsForLaunchedTasks.Add(polledConsumeResult);
-            }
-
-            _currentBatchTasks = processingTasks;
-
-            await Task.WhenAll(processingTasks);
-
-            return batchContext with
-            {
-                LaunchedProcessingTasks = processingTasks,
-                SuccessfulNextOffsets = successfulNextOffsets,
-                ConsumeResultsForLaunchedTasks = consumeResultsForLaunchedTasks
             };
         }
     }

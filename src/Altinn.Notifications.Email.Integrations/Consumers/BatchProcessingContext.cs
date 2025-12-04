@@ -10,11 +10,6 @@ namespace Altinn.Notifications.Email.Integrations.Consumers;
 public sealed record BatchProcessingContext
 {
     /// <summary>
-    /// The processing tasks launched in this batch.
-    /// </summary>
-    public IReadOnlyList<Task> LaunchedProcessingTasks { get; init; } = [];
-
-    /// <summary>
     /// Consume results obtained during the poll phase for this batch.
     /// This may include items that were not launched, depending on failure/cancellation conditions.
     /// </summary>
@@ -24,9 +19,4 @@ public sealed record BatchProcessingContext
     /// Thread-safe collection of per-message next offsets (original offset + 1) for successfully processed consume results.
     /// </summary>
     public ConcurrentBag<TopicPartitionOffset> SuccessfulNextOffsets { get; init; } = [];
-
-    /// <summary>
-    /// Consume results for tasks that were launched in this batch.
-    /// </summary>
-    public IList<ConsumeResult<string, string>> ConsumeResultsForLaunchedTasks { get; init; } = [];
 }

@@ -31,7 +31,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly int _polledConsumeResultsSize = 100;
 
         private CancellationTokenSource? _cancellationTokenSource;
-        private volatile BatchProcessingContext? _lastCompletedBatchContext;
+        private volatile KafkaBatchState? _lastCompletedBatchContext;
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _polledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
@@ -161,21 +161,21 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 ResetMessageProcessingFailureSignal();
 
-                var batchProcessingContext = PollConsumeResults(linkedCancellationToken);
-                if (batchProcessingContext.PolledConsumeResults.Count == 0)
+                var KafkaBatchState = PollConsumeResults(linkedCancellationToken);
+                if (KafkaBatchState.PolledConsumeResults.Count == 0)
                 {
                     batchStopwatch.Stop();
                     await Task.Delay(10, linkedCancellationToken);
                     continue;
                 }
 
-                _polledCounter.Add(batchProcessingContext.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
+                _polledCounter.Add(KafkaBatchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
 
-                batchProcessingContext = await ProcessConsumeResultsAsync(batchProcessingContext, processMessageFunc, retryMessageFunc, linkedCancellationToken);
+                KafkaBatchState = await ProcessConsumeResultsAsync(KafkaBatchState, processMessageFunc, retryMessageFunc, linkedCancellationToken);
 
-                _lastCompletedBatchContext = batchProcessingContext;
+                _lastCompletedBatchContext = KafkaBatchState;
 
-                var contiguousCommitOffsets = ComputeContiguousCommitOffsets(batchProcessingContext);
+                var contiguousCommitOffsets = ComputeContiguousCommitOffsets(KafkaBatchState);
                 if (contiguousCommitOffsets.Count > 0)
                 {
                     CommitOffsets(contiguousCommitOffsets);
@@ -367,10 +367,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </summary>
         /// <param name="cancellationToken">Token observed for cooperative cancellation and shutdown.</param>
         /// <returns>
-        /// A <see cref="BatchProcessingContext"/> with <see cref="BatchProcessingContext.PolledConsumeResults"/>
+        /// A <see cref="KafkaBatchState"/> with <see cref="KafkaBatchState.PolledConsumeResults"/>
         /// containing the consecutively polled <see cref="ConsumeResult{TKey, TValue}"/> items. The list may be empty.
         /// </returns>
-        private BatchProcessingContext PollConsumeResults(CancellationToken cancellationToken)
+        private KafkaBatchState PollConsumeResults(CancellationToken cancellationToken)
         {
             var deadlineTickMs = Environment.TickCount64 + _maxPollDurationMs;
             var polledConsumeResults = new List<ConsumeResult<string, string>>(_polledConsumeResultsSize);
@@ -405,7 +405,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 }
             }
 
-            return new BatchProcessingContext
+            return new KafkaBatchState
             {
                 PolledConsumeResults = [.. polledConsumeResults]
             };
@@ -433,13 +433,13 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// representing the highest contiguous offset that can be committed for each partition without gaps.
         /// Returns an empty list if no contiguous sequences can be established.
         /// </returns>
-        private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(BatchProcessingContext batchContext)
+        private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(KafkaBatchState batchContext)
         {
             var batchByTopicPartition = batchContext.PolledConsumeResults
                .GroupBy(e => e.TopicPartition)
                .ToDictionary(e => e.Key, e => e.Select(x => x.Offset.Value).OrderBy(x => x).ToList());
 
-            var successesByTopicPartition = batchContext.SuccessfulNextOffsets
+            var successesByTopicPartition = batchContext.CommitReadyOffsets
                 .GroupBy(e => e.TopicPartition)
                 .ToDictionary(e => e.Key, e => new HashSet<long>(e.Select(s => s.Offset.Value)));
 
@@ -507,9 +507,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// Token observed for cooperative cancellation. When signaled, polling and new task launches stop and in-flight tasks are awaited.
         /// </param>
         /// <returns>
-        /// An updated <see cref="BatchProcessingContext"/> with <see cref="BatchProcessingContext.SuccessfulNextOffsets"/> populated from completed tasks.
+        /// An updated <see cref="KafkaBatchState"/> with <see cref="KafkaBatchState.CommitReadyOffsets"/> populated from completed tasks.
         /// </returns>
-        private async Task<BatchProcessingContext> ProcessConsumeResultsAsync(BatchProcessingContext processingContext, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
+        private async Task<KafkaBatchState> ProcessConsumeResultsAsync(KafkaBatchState processingContext, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
             if (cancellationToken.IsCancellationRequested && IsShutdownInitiated)
             {
@@ -546,7 +546,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             return processingContext with
             {
-                SuccessfulNextOffsets = [.. successfulOffsets]
+                CommitReadyOffsets = [.. successfulOffsets]
             };
         }
 
@@ -566,7 +566,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// Token observed for cooperative cancellation. When signaled, polling and new task launches stop and in-flight tasks are awaited.
         /// </param>
         /// <returns>
-        /// An updated <see cref="BatchProcessingContext"/> with <see cref="BatchProcessingContext.SuccessfulNextOffsets"/> populated from completed tasks.
+        /// An updated <see cref="KafkaBatchState"/> with <see cref="KafkaBatchState.CommitReadyOffsets"/> populated from completed tasks.
         /// </returns>
         /// <returns>
         /// A <see cref="TopicPartitionOffset"/> representing the next offset to commit (original offset + 1)

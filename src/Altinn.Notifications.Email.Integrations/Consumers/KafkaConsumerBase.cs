@@ -23,12 +23,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private readonly ILogger<KafkaConsumerBase> _logger;
         private readonly IConsumer<string, string> _consumer;
 
+        private int _consumerClosedCounter;
         private int _shutdownInitiatedCounter;
         private int _processingFailureSignaledCounter;
 
         private readonly int _maxPollDurationMs = 100;
         private readonly int _polledConsumeResultsSize = 100;
 
+        private CancellationTokenSource? _cancellationTokenSource;
         private volatile BatchProcessingContext? _lastCompletedBatchContext;
 
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
@@ -55,7 +57,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             try
             {
-                _consumer.Close();
+                if (!IsConsumerClosed)
+                {
+                    _consumer.Close();
+                }
             }
             catch (Exception ex)
             {
@@ -63,7 +68,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
             finally
             {
+                SignalConsumerClosed();
+
                 _consumer.Dispose();
+                _cancellationTokenSource.Dispose();
+
                 base.Dispose();
             }
         }
@@ -71,6 +80,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <inheritdoc/>
         public override Task StartAsync(CancellationToken cancellationToken)
         {
+            _cancellationTokenSource = new CancellationTokenSource();
+
             _consumer.Subscribe(_topicName);
 
             _logger.LogInformation("// {Class} // subscribed to topic {Topic}", GetType().Name, ComputeTopicFingerprint(_topicName));
@@ -83,12 +94,19 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             SignalShutdownIsInitiated();
 
+            if (_cancellationTokenSource != null)
+            {
+                await _cancellationTokenSource.CancelAsync();
+            }
+
             _consumer.Unsubscribe();
 
             _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_topicName));
 
+            await base.StopAsync(cancellationToken);
+
             var contiguousOffsets = _lastCompletedBatchContext is not null ? ComputeContiguousCommitOffsets(_lastCompletedBatchContext) : [];
-            if (contiguousOffsets.Count > 0)
+            if (contiguousOffsets.Count > 0 && !IsConsumerClosed)
             {
                 try
                 {
@@ -102,9 +120,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 }
             }
 
-            _consumer.Close();
+            if (!IsConsumerClosed)
+            {
+                SignalConsumerClosed();
 
-            await base.StopAsync(cancellationToken);
+                _consumer.Close();
+            }
         }
 
         /// <inheritdoc/>
@@ -124,23 +145,29 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </param>
         protected async Task ConsumeMessageAsync(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
+            using var cancellationTokenSource = _cancellationTokenSource is null
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cancellationTokenSource.Token);
+
+            var linkedCancellationToken = cancellationTokenSource.Token;
+
+            while (!linkedCancellationToken.IsCancellationRequested && !IsShutdownInitiated)
             {
                 var batchStopwatch = Stopwatch.StartNew();
 
                 ResetMessageProcessingFailureSignal();
 
-                var batchProcessingContext = PollConsumeResults(cancellationToken);
+                var batchProcessingContext = PollConsumeResults(linkedCancellationToken);
                 if (batchProcessingContext.PolledConsumeResults.Count == 0)
                 {
                     batchStopwatch.Stop();
-                    await Task.Delay(10, cancellationToken);
+                    await Task.Delay(10, linkedCancellationToken);
                     continue;
                 }
 
                 _polledCounter.Add(batchProcessingContext.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_topicName)));
 
-                batchProcessingContext = await ProcessConsumeResultsAsync(batchProcessingContext, processMessageFunc, retryMessageFunc, cancellationToken);
+                batchProcessingContext = await ProcessConsumeResultsAsync(batchProcessingContext, processMessageFunc, retryMessageFunc, linkedCancellationToken);
 
                 _lastCompletedBatchContext = batchProcessingContext;
 
@@ -155,6 +182,21 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 _batchLatencyMs.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _topicName));
             }
         }
+
+        /// <summary>
+        /// Indicates whether the consumer has been closed.
+        /// </summary>
+        private bool IsConsumerClosed => Volatile.Read(ref _consumerClosedCounter) != 0;
+
+        /// <summary>
+        /// Indicates whether the consumer shutdown has been initiated.
+        /// </summary>
+        private bool IsShutdownInitiated => Volatile.Read(ref _shutdownInitiatedCounter) != 0;
+
+        /// <summary>
+        /// Indicates whether a message processing failure has occurred in the current batch.
+        /// </summary>
+        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _processingFailureSignaledCounter) != 0;
 
         /// <summary>
         /// Computes a deterministic truncated SHA-256 hexadecimal fingerprint for a Kafka topic name.
@@ -219,7 +261,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// </param>
         private void CommitOffsets(IEnumerable<TopicPartitionOffset> offsets)
         {
-            if (offsets is null || IsShutdownInitiated)
+            if (offsets is null || IsShutdownInitiated || IsConsumerClosed)
             {
                 return;
             }
@@ -253,11 +295,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Indicates whether the consumer shutdown has been initiated.
-        /// </summary>
-        private bool IsShutdownInitiated => Volatile.Read(ref _shutdownInitiatedCounter) != 0;
-
-        /// <summary>
         /// Creates and configures a Kafka consumer instance.
         /// </summary>
         /// <param name="consumerConfig">The <see cref="ConsumerConfig"/> used to build the consumer.</param>
@@ -286,14 +323,17 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
-                    SignalMessageProcessingFailure();
+                    if (IsConsumerClosed)
+                    {
+                        return;
+                    }
 
                     var contiguousOffsets = _lastCompletedBatchContext is not null ? ComputeContiguousCommitOffsets(_lastCompletedBatchContext) : [];
                     var toCommit = contiguousOffsets
                         .Where(o => partitions.Any(p => p.TopicPartition.Equals(o.TopicPartition)))
                         .ToList();
 
-                    if (toCommit.Count > 0)
+                    if (toCommit.Count > 0 && !IsShutdownInitiated)
                     {
                         try
                         {
@@ -368,14 +408,14 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
+        /// Atomically signals that the consumer has been closed.
+        /// </summary>
+        private void SignalConsumerClosed() => Interlocked.Exchange(ref _consumerClosedCounter, 1);
+
+        /// <summary>
         /// Atomically signals that consumer shutdown has been initiated.
         /// </summary>
         private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _shutdownInitiatedCounter, 1);
-
-        /// <summary>
-        /// Indicates whether a message processing failure has occurred in the current batch.
-        /// </summary>
-        private bool IsMessageProcessingFailureSignaled => Volatile.Read(ref _processingFailureSignaledCounter) != 0;
 
         /// <summary>
         /// Computes per-partition commit offsets by determining the largest contiguous
@@ -392,8 +432,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private static List<TopicPartitionOffset> ComputeContiguousCommitOffsets(BatchProcessingContext batchContext)
         {
             var batchByTopicPartition = batchContext.PolledConsumeResults
-                .GroupBy(e => e.TopicPartition)
-                .ToDictionary(e => e.Key, e => e.Select(x => x.Offset.Value).OrderBy(x => x).ToList());
+               .GroupBy(e => e.TopicPartition)
+               .ToDictionary(e => e.Key, e => e.Select(x => x.Offset.Value).OrderBy(x => x).ToList());
 
             var successesByTopicPartition = batchContext.SuccessfulNextOffsets
                 .GroupBy(e => e.TopicPartition)
@@ -533,7 +573,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         {
             try
             {
-                if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
+                if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated || IsConsumerClosed)
                 {
                     return null;
                 }

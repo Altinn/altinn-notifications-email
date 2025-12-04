@@ -177,22 +177,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
 
             ReadOnlySpan<byte> topicNameBytes = Encoding.UTF8.GetBytes(topicName);
+            
+            byte[] digest = SHA256.HashData(topicNameBytes);
+            string hex = Convert.ToHexString(digest.AsSpan(0, 8));
 
-            Span<byte> digest = stackalloc byte[32];
-            SHA256.HashData(topicNameBytes, digest);
-
-            // First 8 bytes -> 16 hex chars (truncated fingerprint)
-            Span<char> fingerprintBuffer = stackalloc char[16];
-            const string hexAlphabet = "0123456789abcdef";
-
-            for (int i = 0; i < 8; i++)
-            {
-                byte byteValue = digest[i];
-                fingerprintBuffer[i * 2] = hexAlphabet[byteValue >> 4];
-                fingerprintBuffer[(i * 2) + 1] = hexAlphabet[byteValue & 0x0F];
-            }
-
-            return new string(fingerprintBuffer);
+            return hex.ToLowerInvariant();
         }
 
         /// <summary>

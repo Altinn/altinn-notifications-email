@@ -594,7 +594,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 try
                 {
-                    if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated)
+                    if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated || IsConsumerClosed)
                     {
                         return null;
                     }

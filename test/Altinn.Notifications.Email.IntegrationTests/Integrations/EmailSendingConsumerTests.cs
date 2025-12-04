@@ -207,7 +207,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             l => l.Log(
                 It.Is<LogLevel>(e => e == LogLevel.Information),
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>(state => state.ToString()!.Contains("Committed last batch safe offsets for processed messages during shutdown")),
+                It.Is<It.IsAnyType>((state, t) => state.ToString()!.Contains("Committed last batch safe offsets for processed messages during shutdown")),
                 It.IsAny<Exception?>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);

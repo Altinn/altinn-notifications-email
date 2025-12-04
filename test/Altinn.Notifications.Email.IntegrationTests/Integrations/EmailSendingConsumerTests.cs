@@ -70,14 +70,13 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         Core.Sending.Email email =
             new(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
-        using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
         using SendEmailQueueConsumer sendEmailQueueConsumer = GetEmailSendingConsumer(sendingServiceMock.Object, sendEmailQueueConsumerLogger: loggerMock.Object);
+        using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider!); // resolve after ServiceProvider is built
 
         // Act
         await sendEmailQueueConsumer.StartAsync(CancellationToken.None);
         await kafkaProducer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
 
-        // Wait until the service is called (or timeout)
         bool processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
         await sendEmailQueueConsumer.StopAsync(CancellationToken.None);
 
@@ -106,7 +105,6 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         await sendEmailQueueConsumer.StartAsync(CancellationToken.None);
         await kafkaProducer.ProduceAsync(_emailSendingConsumerTopic, "Not an email");
 
-        // Wait briefly ensuring the signal is never set
         bool processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(50));
         await sendEmailQueueConsumer.StopAsync(CancellationToken.None);
 

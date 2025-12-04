@@ -215,9 +215,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <returns>A fully initialized <see cref="ConsumerConfig"/> ready to be used by a <see cref="ConsumerBuilder{TKey, TValue}"/>.</returns>
         private ConsumerConfig BuildConfiguration(KafkaSettings settings)
         {
-            var config = new SharedClientConfig(settings);
+            var configuration = new SharedClientConfig(settings);
 
-            var consumerConfig = new ConsumerConfig(config.ConsumerConfig)
+            var consumerConfig = new ConsumerConfig(configuration.ConsumerConfig)
             {
                 FetchWaitMaxMs = 100,
                 QueuedMinMessages = 50,
@@ -248,7 +248,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private void SignalFailure() => Interlocked.Exchange(ref _failureFlag, 1);
 
         /// <summary>
-        /// Creates and configures a Kafka consumer instance with error, statistics, and partition assignment handlers.
+        /// Creates and configures a Kafka consumer instance.
         /// </summary>
         /// <param name="consumerConfig">The <see cref="ConsumerConfig"/> used to build the consumer.</param>
         /// <returns>A configured <see cref="IConsumer{TKey, TValue}"/> for consuming messages with string keys and values.</returns>
@@ -276,13 +276,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
-                    _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(p => p.Partition.Value)));
-
-                    SignalFailure();
+                    _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
                 })
                 .SetPartitionsAssignedHandler((_, partitions) =>
                 {
-                    _logger.LogInformation("// {Class} // Partitions assigned: {Partitions}", GetType().Name, string.Join(',', partitions.Select(p => p.Partition.Value)));
+                    _logger.LogInformation("// {Class} // Partitions assigned: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
                 })
                 .Build();
         }

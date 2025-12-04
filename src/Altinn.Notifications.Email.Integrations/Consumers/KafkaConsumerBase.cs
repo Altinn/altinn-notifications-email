@@ -21,7 +21,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
     {
         private int _batchFailureFlag;
         private int _consumerClosedFlag;
-        private int _shutdownInitiatedFlag;
+        private int _shutdownStartedFlag;
 
         private readonly int _maxBatchSize = 100;
         private readonly int _batchPollTimeoutMs = 100;
@@ -58,7 +58,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             {
                 if (!IsConsumerClosed)
                 {
-                    SignalConsumerClosed();
+                    SignalConsumerClosure();
 
                     _kafkaConsumer.Close();
                 }
@@ -92,7 +92,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <inheritdoc/>
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
-            SignalShutdownIsInitiated();
+            SignalShutdownStarted();
 
             if (_internalCancellationSource != null)
             {
@@ -105,24 +105,24 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             await base.StopAsync(cancellationToken);
 
-            var contiguousOffsets = _lastProcessedBatch is not null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
-            if (contiguousOffsets.Count > 0 && !IsConsumerClosed)
+            var lastBatchSafeOffsets = _lastProcessedBatch != null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
+            if (lastBatchSafeOffsets.Count > 0 && !IsConsumerClosed)
             {
                 try
                 {
-                    _kafkaConsumer.Commit(contiguousOffsets);
+                    _kafkaConsumer.Commit(lastBatchSafeOffsets);
 
-                    _logger.LogInformation("// {Class} // Committed contiguous offsets for processed messages during shutdown", GetType().Name);
+                    _logger.LogInformation("// {Class} // Committed last batch safe offsets for processed messages during shutdown", GetType().Name);
                 }
                 catch (KafkaException ex)
                 {
-                    _logger.LogError(ex, "// {Class} // Failed to commit contiguous offsets during shutdown", GetType().Name);
+                    _logger.LogError(ex, "// {Class} // Failed to commit last batch safe offsets during shutdown", GetType().Name);
                 }
             }
 
             if (!IsConsumerClosed)
             {
-                SignalConsumerClosed();
+                SignalConsumerClosure();
 
                 _kafkaConsumer.Close();
             }
@@ -143,43 +143,46 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <param name="cancellationToken">
         /// Token observed for cooperative cancellation. When signaled, polling and new task launches stop and in-flight tasks are awaited.
         /// </param>
+        /// <returns>
+        /// A task that represents the asynchronous consume operation. The task completes when cancellation is requested or shutdown is initiated.
+        /// </returns>
         protected async Task ConsumeMessageAsync(Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            using var cancellationTokenSource = _internalCancellationSource is null
+            using var linkedCancellationTokenSource = _internalCancellationSource is null
                 ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
                 : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _internalCancellationSource.Token);
 
-            var linkedCancellationToken = cancellationTokenSource.Token;
+            var linkedCancellationToken = linkedCancellationTokenSource.Token;
 
-            while (!linkedCancellationToken.IsCancellationRequested && !IsShutdownInitiated)
+            while (!linkedCancellationToken.IsCancellationRequested && !IsShutdownStarted && !IsConsumerClosed)
             {
-                var batchStopwatch = Stopwatch.StartNew();
+                ResetBatchProcessingFailureSignal();
 
-                ResetMessageProcessingFailureSignal();
+                var batchProcessingTimer = Stopwatch.StartNew();
 
-                var KafkaBatchState = PollConsumeResults(linkedCancellationToken);
-                if (KafkaBatchState.PolledConsumeResults.Count == 0)
+                var batchState = PollConsumeResults(linkedCancellationToken);
+                if (batchState.PolledConsumeResults.Count == 0)
                 {
-                    batchStopwatch.Stop();
+                    batchProcessingTimer.Stop();
                     await Task.Delay(10, linkedCancellationToken);
                     continue;
                 }
 
-                _messagesPolledCounter.Add(KafkaBatchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
+                _messagesPolledCounter.Add(batchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
-                KafkaBatchState = await ProcessConsumeResultsAsync(KafkaBatchState, processMessageFunc, retryMessageFunc, linkedCancellationToken);
+                batchState = await ProcessConsumeResultsAsync(batchState, processMessageFunc, retryMessageFunc, linkedCancellationToken);
 
-                _lastProcessedBatch = KafkaBatchState;
+                _lastProcessedBatch = batchState;
 
-                var contiguousCommitOffsets = GetSafeCommitOffsets(KafkaBatchState);
-                if (contiguousCommitOffsets.Count > 0)
+                var safeCommitOffsets = GetSafeCommitOffsets(batchState);
+                if (safeCommitOffsets.Count > 0)
                 {
-                    CommitOffsets(contiguousCommitOffsets);
+                    CommitNormalizedOffsets(safeCommitOffsets);
                 }
 
-                batchStopwatch.Stop();
+                batchProcessingTimer.Stop();
 
-                _batchProcessingLatency.Record(batchStopwatch.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _subscribedTopicName));
+                _batchProcessingLatency.Record(batchProcessingTimer.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _subscribedTopicName));
             }
         }
 
@@ -189,9 +192,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private bool IsConsumerClosed => Volatile.Read(ref _consumerClosedFlag) != 0;
 
         /// <summary>
-        /// Indicates whether the consumer shutdown has been initiated.
+        /// Indicates whether consumer shutdown has been started.
         /// </summary>
-        private bool IsShutdownInitiated => Volatile.Read(ref _shutdownInitiatedFlag) != 0;
+        private bool IsShutdownStarted => Volatile.Read(ref _shutdownStartedFlag) != 0;
 
         /// <summary>
         /// Indicates whether a message processing failure has occurred in the current batch.
@@ -253,48 +256,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Commits offsets to Kafka safely by normalizing per-partition offsets and handling transient
-        /// consumer group states. Normalization ensures only the highest next-offset per partition is committed.
-        /// </summary>
-        /// <param name="offsets">
-        /// The per-message next-offsets (original offset + 1) to commit. May contain multiple entries per partition.
-        /// </param>
-        private void CommitOffsets(IEnumerable<TopicPartitionOffset> offsets)
-        {
-            if (offsets is null || IsShutdownInitiated || IsConsumerClosed)
-            {
-                return;
-            }
-
-            var normalizedOffsets = offsets
-                .GroupBy(e => e.TopicPartition)
-                .Select(e =>
-                {
-                    var maxOffset = e.Select(x => x.Offset.Value).Max();
-                    return new TopicPartitionOffset(e.Key, new Offset(maxOffset));
-                })
-                .ToList();
-
-            if (normalizedOffsets.Count == 0)
-            {
-                return;
-            }
-
-            try
-            {
-                _kafkaConsumer.Commit(normalizedOffsets);
-            }
-            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
-            {
-                _logger.LogWarning(ex, "// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
-            }
-            catch (KafkaException ex)
-            {
-                _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
-            }
-        }
-
-        /// <summary>
         /// Creates and configures a Kafka consumer instance.
         /// </summary>
         /// <param name="consumerConfig">The <see cref="ConsumerConfig"/> used to build the consumer.</param>
@@ -328,16 +289,16 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         return;
                     }
 
-                    var contiguousOffsets = _lastProcessedBatch is not null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
-                    var toCommit = contiguousOffsets
-                        .Where(o => partitions.Any(p => p.TopicPartition.Equals(o.TopicPartition)))
-                        .ToList();
+                    var lastBatchSafeOffsets = _lastProcessedBatch != null ? GetSafeCommitOffsets(_lastProcessedBatch) : [];
+                    var revokedPartitionOffsets = lastBatchSafeOffsets
+                    .Where(offsetEntry => partitions.Any(revokedPartition => revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
+                    .ToList();
 
-                    if (toCommit.Count > 0 && !IsShutdownInitiated)
+                    if (revokedPartitionOffsets.Count > 0 && !IsShutdownStarted)
                     {
                         try
                         {
-                            _kafkaConsumer.Commit(toCommit);
+                            _kafkaConsumer.Commit(revokedPartitionOffsets);
                         }
                         catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
                         {
@@ -364,35 +325,35 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <param name="cancellationToken">Token observed for cooperative cancellation and shutdown.</param>
         /// <returns>
         /// A <see cref="KafkaBatchState"/> with <see cref="KafkaBatchState.PolledConsumeResults"/>
-        /// containing the consecutively polled <see cref="ConsumeResult{TKey, TValue}"/> items. The list may be empty.
+        /// containing the polled <see cref="ConsumeResult{TKey, TValue}"/> items. The list may be empty.
         /// </returns>
         private KafkaBatchState PollConsumeResults(CancellationToken cancellationToken)
         {
-            var deadlineTickMs = Environment.TickCount64 + _batchPollTimeoutMs;
-            var polledConsumeResults = new List<ConsumeResult<string, string>>(_maxBatchSize);
+            var batchPollingDeadline = Environment.TickCount64 + _batchPollTimeoutMs;
+            var batchMessageCollection = new List<ConsumeResult<string, string>>(_maxBatchSize);
 
-            while (!cancellationToken.IsCancellationRequested && !IsShutdownInitiated)
+            while (!cancellationToken.IsCancellationRequested && !IsShutdownStarted && !IsConsumerClosed)
             {
-                var remainingMs = (int)Math.Max(0, deadlineTickMs - Environment.TickCount64);
-                if (remainingMs <= 0)
+                var remainingTimeoutMs = (int)Math.Max(0, batchPollingDeadline - Environment.TickCount64);
+                if (remainingTimeoutMs <= 0)
                 {
                     break;
                 }
 
-                if (polledConsumeResults.Count >= _maxBatchSize)
+                if (batchMessageCollection.Count >= _maxBatchSize)
                 {
                     break;
                 }
 
                 try
                 {
-                    var consumeResult = _kafkaConsumer.Consume(TimeSpan.FromMilliseconds(remainingMs));
-                    if (consumeResult is null)
+                    var polledMessage = _kafkaConsumer.Consume(TimeSpan.FromMilliseconds(remainingTimeoutMs));
+                    if (polledMessage is null)
                     {
                         break;
                     }
 
-                    polledConsumeResults.Add(consumeResult);
+                    batchMessageCollection.Add(polledMessage);
                 }
                 catch (ConsumeException ex)
                 {
@@ -403,19 +364,64 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             return new KafkaBatchState
             {
-                PolledConsumeResults = [.. polledConsumeResults]
+                PolledConsumeResults = [.. batchMessageCollection]
             };
         }
 
         /// <summary>
-        /// Atomically signals that the consumer has been closed.
+        /// Commits normalized offsets to Kafka.
+        /// Automatically normalizes multiple offsets per partition to the highest value, ensuring safe offset advancement
+        /// and gracefully handling transient Kafka consumer group states during rebalancing operations.
         /// </summary>
-        private void SignalConsumerClosed() => Interlocked.Exchange(ref _consumerClosedFlag, 1);
+        /// <param name="offsetsToCommit">
+        /// Collection of next-position offsets (original message offset + 1) ready for commit to Kafka.
+        /// May contain multiple offset entries per partition from concurrent message processing, which are automatically
+        /// normalized to ensure only the highest safe offset per partition is committed to Kafka.
+        /// </param>
+        private void CommitNormalizedOffsets(List<TopicPartitionOffset> offsetsToCommit)
+        {
+            if (offsetsToCommit is null || offsetsToCommit.Count == 0 || IsShutdownStarted || IsConsumerClosed)
+            {
+                return;
+            }
+
+            var normalizedOffsetsPerPartition = offsetsToCommit
+                .GroupBy(e => e.TopicPartition)
+                .Select(e =>
+                {
+                    var maxOffset = e.Select(x => x.Offset.Value).Max();
+                    return new TopicPartitionOffset(e.Key, new Offset(maxOffset));
+                })
+                .ToList();
+
+            if (normalizedOffsetsPerPartition.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _kafkaConsumer.Commit(normalizedOffsetsPerPartition);
+            }
+            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+            {
+                _logger.LogWarning(ex, "// {Class} // Bulk commit skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+            }
+            catch (KafkaException ex)
+            {
+                _logger.LogError(ex, "// {Class} // Bulk commit failed unexpectedly", GetType().Name);
+            }
+        }
+
+        /// <summary>
+        /// Atomically signals that the consumer closure.
+        /// </summary>
+        private void SignalConsumerClosure() => Interlocked.Exchange(ref _consumerClosedFlag, 1);
 
         /// <summary>
         /// Atomically signals that consumer shutdown has been initiated.
         /// </summary>
-        private void SignalShutdownIsInitiated() => Interlocked.Exchange(ref _shutdownInitiatedFlag, 1);
+        private void SignalShutdownStarted() => Interlocked.Exchange(ref _shutdownStartedFlag, 1);
 
         /// <summary>
         /// Determines the highest safe commit offset for each partition by finding
@@ -477,61 +483,66 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
-        /// Atomically signals that a message processing failure has occurred in the current batch.
+        /// Atomically signals that a batch processing failure has occurred.
         /// </summary>
-        private void SignalMessageProcessingFailure() => Interlocked.Exchange(ref _batchFailureFlag, 1);
+        private void SignalBatchProcessingFailure() => Interlocked.Exchange(ref _batchFailureFlag, 1);
 
         /// <summary>
-        /// Atomically clears the message processing failure signal before handling a new batch.
+        /// Atomically clears the batch processing failure signal before handling a new batch.
         /// </summary>
-        private void ResetMessageProcessingFailureSignal() => Interlocked.Exchange(ref _batchFailureFlag, 0);
+        private void ResetBatchProcessingFailureSignal() => Interlocked.Exchange(ref _batchFailureFlag, 0);
 
         /// <summary>
-        /// Launches processing tasks using Parallel.ForEachAsync for efficient concurrent processing with built-in resource management.
-        /// Replaces manual task orchestration with Task.WhenAll() and provides better concurrency control.
+        /// Processes a batch of Kafka messages concurrently using parallel execution with built-in retry logic and error handling.
+        /// Each message is processed independently, and successfully processed messages contribute their offsets to the commit-ready collection.
+        /// Processing stops gracefully when cancellation is requested or the consumer is shutting down.
         /// </summary>
         /// <param name="processingContext">
-        /// The current batch context containing the polled consume results to be processed.
+        /// The batch context containing the polled Kafka messages and any previously processed offsets.
         /// </param>
         /// <param name="processMessageFunc">
-        /// Delegate that processes a single message value. Exceptions trigger a retry via <paramref name="retryMessageFunc"/>.
+        /// Primary message processing delegate. When this delegate throws an exception, the message is automatically retried using <paramref name="retryMessageFunc"/>.
         /// </param>
         /// <param name="retryMessageFunc">
-        /// Delegate invoked when <paramref name="processMessageFunc"/> fails. If it also fails, the batch stops launching new processing tasks.
+        /// Retry processing delegate invoked when <paramref name="processMessageFunc"/> fails. If this delegate also fails, 
+        /// a batch processing failure is signaled to prevent further message processing in subsequent iterations.
         /// </param>
         /// <param name="cancellationToken">
-        /// Token observed for cooperative cancellation. When signaled, polling and new task launches stop and in-flight tasks are awaited.
+        /// Cancellation token for cooperative shutdown. When signaled, no new message processing tasks are started, 
+        /// but in-flight tasks are allowed to complete naturally.
         /// </param>
         /// <returns>
-        /// An updated <see cref="KafkaBatchState"/> with <see cref="KafkaBatchState.CommitReadyOffsets"/> populated from completed tasks.
+        /// An updated <see cref="KafkaBatchState"/> with the <see cref="KafkaBatchState.CommitReadyOffsets"/> collection 
+        /// populated with next-offsets (original offset + 1) from all successfully processed messages. 
+        /// Messages that failed both primary and retry processing are not included in the commit-ready offsets.
         /// </returns>
         private async Task<KafkaBatchState> ProcessConsumeResultsAsync(KafkaBatchState processingContext, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
         {
-            if (cancellationToken.IsCancellationRequested && IsShutdownInitiated)
+            if (cancellationToken.IsCancellationRequested || IsShutdownStarted || IsConsumerClosed)
             {
                 return processingContext;
             }
 
-            var parallelOptions = new ParallelOptions
+            var concurrencyConfiguration = new ParallelOptions
             {
                 CancellationToken = cancellationToken,
                 MaxDegreeOfParallelism = _maxBatchSize
             };
 
-            var successfulOffsets = new ConcurrentBag<TopicPartitionOffset>();
+            var processedMessageOffsets = new ConcurrentBag<TopicPartitionOffset>();
 
             try
             {
                 await Parallel.ForEachAsync(
                     processingContext.PolledConsumeResults,
-                    parallelOptions,
+                    concurrencyConfiguration,
                     async (consumeResult, cancellationToken) =>
                     {
-                        var result = await ProcessSingleMessageAsync(consumeResult, processMessageFunc, retryMessageFunc, cancellationToken);
+                        var processedOffset = await ProcessMessageAsync(consumeResult, processMessageFunc, retryMessageFunc, cancellationToken);
 
-                        if (result is not null)
+                        if (processedOffset != null)
                         {
-                            successfulOffsets.Add(result);
+                            processedMessageOffsets.Add(processedOffset);
                         }
                     });
             }
@@ -542,72 +553,73 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             return processingContext with
             {
-                CommitReadyOffsets = [.. successfulOffsets]
+                CommitReadyOffsets = [.. processedMessageOffsets]
             };
         }
 
         /// <summary>
-        /// Processes a single Kafka message with semaphore-controlled concurrency, retry logic, and comprehensive error handling.
+        /// Processes an individual Kafka message with automatic retry logic, comprehensive error handling, and batch processing coordination.
         /// </summary>
-        /// <param name="consumeResult">
-        /// The consume result which cotains the Kafka-message to process.
+        /// <param name="kafkaMessage">
+        /// The Kafka consume result containing the message data, offset, partition, and metadata for processing.
         /// </param>
-        /// <param name="processMessageFunc">
-        /// Delegate that processes a single message value. Exceptions trigger a retry via <paramref name="retryMessageFunc"/>.
+        /// <param name="primaryProcessorFunc">
+        /// Primary message processing delegate that handles the core business logic for the message value. 
+        /// When this delegate throws an exception, the message is automatically retried using <paramref name="retryProcessorFunc"/>.
         /// </param>
-        /// <param name="retryMessageFunc">
-        /// Delegate invoked when <paramref name="processMessageFunc"/> fails. If it also fails, the batch stops launching new processing tasks.
+        /// <param name="retryProcessorFunc">
+        /// Fallback processing delegate invoked when <paramref name="primaryProcessorFunc"/> fails. 
+        /// If this delegate also fails, a batch processing failure signal is set to halt further processing in the current iteration.
         /// </param>
         /// <param name="cancellationToken">
-        /// Token observed for cooperative cancellation. When signaled, polling and new task launches stop and in-flight tasks are awaited.
+        /// Cancellation token for cooperative shutdown. Processing is short-circuited immediately when cancellation is requested,
+        /// consumer shutdown is initiated, consumer is closed, or a batch processing failure has been signaled.
         /// </param>
         /// <returns>
-        /// An updated <see cref="KafkaBatchState"/> with <see cref="KafkaBatchState.CommitReadyOffsets"/> populated from completed tasks.
+        /// A <see cref="TopicPartitionOffset"/> representing the next offset to commit (original offset + 1) 
+        /// if message processing succeeds through either primary or retry processing pathways;
+        /// otherwise <c>null</c> if processing fails completely, is short-circuited due to shutdown conditions, 
+        /// or is skipped due to batch processing failure signals.
         /// </returns>
-        /// <returns>
-        /// A <see cref="TopicPartitionOffset"/> representing the next offset to commit (original offset + 1)
-        /// if message processing succeeds (either via primary or retry processing);
-        /// otherwise <c>null</c> if processing fails or is short-circuited due to cancellation/shutdown.
-        /// </returns>
-        private async Task<TopicPartitionOffset?> ProcessSingleMessageAsync(ConsumeResult<string, string> consumeResult, Func<string, Task> processMessageFunc, Func<string, Task> retryMessageFunc, CancellationToken cancellationToken)
+        private async Task<TopicPartitionOffset?> ProcessMessageAsync(ConsumeResult<string, string> kafkaMessage, Func<string, Task> primaryProcessorFunc, Func<string, Task> retryProcessorFunc, CancellationToken cancellationToken)
         {
             try
             {
-                if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated || IsConsumerClosed)
+                if (cancellationToken.IsCancellationRequested || IsShutdownStarted || IsConsumerClosed || IsMessageProcessingFailureSignaled)
                 {
                     return null;
                 }
 
-                await processMessageFunc(consumeResult.Message.Value);
+                await primaryProcessorFunc(kafkaMessage.Message.Value);
 
                 _messagesProcessedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
-                return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
+                return new TopicPartitionOffset(kafkaMessage.TopicPartition, kafkaMessage.Offset + 1);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, consumeResult.Offset);
+                _logger.LogError(ex, "// {Class} // Error processing message at offset {Offset}, attempting retry", GetType().Name, kafkaMessage.Offset);
 
                 try
                 {
-                    if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled || IsShutdownInitiated || IsConsumerClosed)
+                    if (cancellationToken.IsCancellationRequested || IsShutdownStarted || IsConsumerClosed || IsMessageProcessingFailureSignaled)
                     {
                         return null;
                     }
 
-                    await retryMessageFunc(consumeResult.Message.Value);
+                    await retryProcessorFunc(kafkaMessage.Message.Value);
 
                     _retrySuccessCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
 
-                    return new TopicPartitionOffset(consumeResult.TopicPartition, consumeResult.Offset + 1);
+                    return new TopicPartitionOffset(kafkaMessage.TopicPartition, kafkaMessage.Offset + 1);
                 }
                 catch (Exception retryEx)
                 {
-                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, consumeResult.Offset);
+                    SignalBatchProcessingFailure();
+
+                    _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, kafkaMessage.Offset);
 
                     _retryFailureCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
-
-                    SignalMessageProcessingFailure();
 
                     return null;
                 }

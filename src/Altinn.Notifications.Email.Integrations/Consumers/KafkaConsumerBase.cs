@@ -405,11 +405,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .ToList();
 
-            if (normalizedOffsetsPerPartition.Count == 0)
-            {
-                return;
-            }
-
             try
             {
                 _kafkaConsumer.Commit(normalizedOffsetsPerPartition);

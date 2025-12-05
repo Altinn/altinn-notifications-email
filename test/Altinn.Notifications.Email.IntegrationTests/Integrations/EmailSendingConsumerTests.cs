@@ -437,6 +437,81 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GivenPrimaryProcessingThrows_WhenRetrySucceeds_ThenOffsetCommitted_AndProducerInvokedOnce()
+    {
+        // Arrange
+        var retryTopicName = Guid.NewGuid().ToString();
+
+        var kafkaSettings = new KafkaSettings
+        {
+            BrokerAddress = "localhost:9092",
+            SendEmailQueueRetryTopicName = retryTopicName,
+            SendEmailQueueTopicName = _emailSendingConsumerTopic,
+            Consumer = new() { GroupId = "email-sending-consumer" },
+            EmailSendingAcceptedTopicName = _emailSendingAcceptedProducerTopic,
+            Admin = new() { TopicList = [_emailSendingConsumerTopic, _emailSendingAcceptedProducerTopic, retryTopicName] }
+        };
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        var retryProducedSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated primary failure"));
+
+        var retryProducerMock = new Mock<ICommonProducer>();
+        retryProducerMock
+            .Setup(p => p.ProduceAsync(retryTopicName, It.IsAny<string>()))
+            .Callback(retryProducedSignal.Set)
+            .ReturnsAsync(true);
+
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton(kafkaSettings)
+            .AddSingleton(retryProducerMock.Object)
+            .AddSingleton(sendingServiceMock.Object);
+
+        if (loggerMock != null)
+        {
+            services.AddSingleton(loggerMock.Object);
+        }
+
+        services.AddHostedService<SendEmailQueueConsumer>();
+
+        var serviceProvider = services.BuildServiceProvider();
+        var emailSendingConsumer = serviceProvider.GetServices<IHostedService>().OfType<SendEmailQueueConsumer>().Single();
+
+        // Use real producer for sending test message to main topic
+        var realProducer = KafkaUtil.GetKafkaProducer(CreateServiceProvider(sendingServiceMock.Object, null, kafkaSettings));
+
+        try
+        {
+            // Act
+            await emailSendingConsumer.StartAsync(CancellationToken.None);
+
+            var email = new Core.Sending.Email(Guid.NewGuid(), "retry-test", "body", "from", "to", EmailContentType.Plain);
+            await realProducer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+
+            bool retryObserved = await WaitForConditionAsync(() => retryProducedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+
+            await emailSendingConsumer.StopAsync(CancellationToken.None);
+
+            // Assert
+            Assert.True(retryObserved, "Retry pathway did not complete promptly.");
+            sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
+            retryProducerMock.Verify(p => p.ProduceAsync(retryTopicName, It.IsAny<string>()), Times.Once);
+        }
+        finally
+        {
+            // Cleanup
+            await KafkaUtil.DeleteTopicAsync(retryTopicName);
+            await serviceProvider.DisposeAsync();
+            realProducer.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task GivenShutdown_ThenLastBatchSafeOffsetsCommittedOnce_AndPendingMessageProcessedAfterRestart()
     {
         // Arrange

@@ -191,7 +191,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 batchProcessingTimer.Stop();
 
-                _batchProcessingLatency.Record(batchProcessingTimer.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", _subscribedTopicName));
+                _batchProcessingLatency.Record(batchProcessingTimer.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
             }
         }
 

@@ -31,7 +31,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private volatile KafkaBatchState? _lastProcessedBatch;
         private readonly IConsumer<string, string> _kafkaConsumer;
         private CancellationTokenSource? _internalCancellationSource;
-
+        
+        private const string _metricsTopicTag = "topic";
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _messagesPolledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
         private static readonly Counter<int> _messagesProcessedCounter = _meter.CreateCounter<int>("kafka.consumer.processed");
@@ -179,7 +180,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     continue;
                 }
 
-                _messagesPolledCounter.Add(batchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
+                _messagesPolledCounter.Add(batchState.PolledConsumeResults.Count, KeyValuePair.Create<string, object?>(_metricsTopicTag, ComputeTopicFingerprint(_subscribedTopicName)));
 
                 batchState = await ProcessConsumeResultsAsync(batchState, processMessageFunc, retryMessageFunc, linkedCancellationToken);
 
@@ -193,7 +194,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 batchProcessingTimer.Stop();
 
-                _batchProcessingLatency.Record(batchProcessingTimer.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
+                _batchProcessingLatency.Record(batchProcessingTimer.Elapsed.TotalMilliseconds, KeyValuePair.Create<string, object?>(_metricsTopicTag, ComputeTopicFingerprint(_subscribedTopicName)));
             }
         }
 
@@ -616,7 +617,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 await primaryProcessorFunc(kafkaMessage.Message.Value);
 
-                _messagesProcessedCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
+                _messagesProcessedCounter.Add(1, KeyValuePair.Create<string, object?>(_metricsTopicTag, ComputeTopicFingerprint(_subscribedTopicName)));
 
                 return new TopicPartitionOffset(kafkaMessage.TopicPartition, kafkaMessage.Offset + 1);
             }
@@ -633,7 +634,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     await retryProcessorFunc(kafkaMessage.Message.Value);
 
-                    _retrySuccessCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
+                    _retrySuccessCounter.Add(1, KeyValuePair.Create<string, object?>(_metricsTopicTag, ComputeTopicFingerprint(_subscribedTopicName)));
 
                     return new TopicPartitionOffset(kafkaMessage.TopicPartition, kafkaMessage.Offset + 1);
                 }
@@ -643,7 +644,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     _logger.LogError(retryEx, "// {Class} // Retry failed for message at offset {Offset}. Halting further launches.", GetType().Name, kafkaMessage.Offset);
 
-                    _retryFailureCounter.Add(1, KeyValuePair.Create<string, object?>("topic", ComputeTopicFingerprint(_subscribedTopicName)));
+                    _retryFailureCounter.Add(1, KeyValuePair.Create<string, object?>(_metricsTopicTag, ComputeTopicFingerprint(_subscribedTopicName)));
 
                     return null;
                 }

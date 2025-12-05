@@ -131,7 +131,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             await base.StopAsync(cancellationToken);
 
-            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, _topicFingerprint);
+            _logger.LogInformation("// {Class} // Unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, _topicFingerprint);
 
             if (!IsConsumerClosed)
             {
@@ -315,6 +315,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     }
 
                     CommitLastBatchSafeOffsetsForRevokedPartitions(partitions);
+
+                    _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
                 })
                 .SetPartitionsAssignedHandler((_, partitions) =>
                 {
@@ -482,7 +484,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// Returns an empty list when no contiguous processing success can be established from batch start for any partition.
         /// Each offset represents the next position to read from (original message offset + 1) following Kafka commit semantics.
         /// </returns>
-        private static IList<TopicPartitionOffset> CalculateContiguousCommitOffsets(IList<TopicPartitionOffset> commitReadyOffsets, IList<ConsumeResult<string, string>> polledConsumeResults)
+        private static List<TopicPartitionOffset> CalculateContiguousCommitOffsets(List<TopicPartitionOffset> commitReadyOffsets, List<ConsumeResult<string, string>> polledConsumeResults)
         {
             var safeOffsetsToCommit = new List<TopicPartitionOffset>();
 
@@ -580,12 +582,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                 try
                 {
-                    if (kafkaMessage.Message.Value is null)
-                    {
-                        _logger.LogWarning("// {Class} // Skipping message with null value at offset {Offset}", GetType().Name, kafkaMessage.Offset);
-                        return new TopicPartitionOffset(kafkaMessage.TopicPartition, kafkaMessage.Offset + 1);
-                    }
-
                     if (cancellationToken.IsCancellationRequested || IsMessageProcessingFailureSignaled)
                     {
                         return null;
@@ -633,7 +629,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// An immutable collection of <see cref="TopicPartitionOffset"/> representing the next-offsets (original offset + 1) 
         /// from all successfully processed messages. Messages that failed both primary and retry processing are not included.
         /// </returns>
-        private async Task<IList<TopicPartitionOffset>> ProcessConsumeResultsAsync(IList<ConsumeResult<string, string>> consumeResults, Func<string, Task> processFunc, Func<string, Task> retryFunc, CancellationToken cancellationToken)
+        private async Task<List<TopicPartitionOffset>> ProcessConsumeResultsAsync(List<ConsumeResult<string, string>> consumeResults, Func<string, Task> processFunc, Func<string, Task> retryFunc, CancellationToken cancellationToken)
         {
             if (cancellationToken.IsCancellationRequested || IsShutdownStarted || IsConsumerClosed)
             {

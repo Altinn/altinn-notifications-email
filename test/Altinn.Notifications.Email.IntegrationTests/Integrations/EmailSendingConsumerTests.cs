@@ -301,9 +301,9 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         {
             BrokerAddress = "localhost:9092",
             SendEmailQueueTopicName = firstTopicName,
+            EmailSendingAcceptedTopicName = secondTopicName,
             Consumer = new() { GroupId = "test-partition-mismatch" },
-            EmailSendingAcceptedTopicName = _emailSendingAcceptedProducerTopic,
-            Admin = new() { TopicList = [firstTopicName, secondTopicName, _emailSendingAcceptedProducerTopic] }
+            Admin = new() { TopicList = [firstTopicName, secondTopicName, _emailSendingConsumerTopic, _emailSendingAcceptedProducerTopic] }
         };
 
         var serviceProvider = CreateServiceProvider(sendingServiceMock.Object, loggerMock.Object, kafkaSettings);
@@ -606,7 +606,10 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             {
                 var message = i.Arguments[2]?.ToString();
 
-                return message?.Contains("Commit") == true || message?.Contains("revocation") == true || message?.Contains("last batch") == true;
+                return message?.Contains("Partitions revoked", StringComparison.OrdinalIgnoreCase) == true ||
+                       message?.Contains("subscribed to topic", StringComparison.OrdinalIgnoreCase) == true ||
+                       message?.Contains("Partitions assigned", StringComparison.OrdinalIgnoreCase) == true ||
+                       message?.Contains("unsubscribed from topic", StringComparison.OrdinalIgnoreCase) == true;
             })
             .ToList();
 

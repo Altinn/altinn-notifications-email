@@ -10,10 +10,10 @@ public sealed record KafkaBatchState
     /// <summary>
     /// The commit-ready offsets for successfully processed messages. Contains the next offset (original + 1) for each successfully processed message.
     /// </summary>
-    public IList<TopicPartitionOffset> CommitReadyOffsets { get; init; } = [];
+    public List<TopicPartitionOffset> CommitReadyOffsets { get; init; } = [];
 
     /// <summary>
     /// The messages retrieved from Kafka during the batch polling operation.
     /// </summary>
-    public IList<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
+    public List<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
 }

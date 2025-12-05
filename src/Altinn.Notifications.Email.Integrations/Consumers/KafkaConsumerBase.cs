@@ -92,16 +92,12 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// <inheritdoc/>
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
-            SignalShutdownStarted();
-
             if (_internalCancellationSource != null)
             {
                 await _internalCancellationSource.CancelAsync();
             }
 
-            _kafkaConsumer.Unsubscribe();
-
-            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_subscribedTopicName));
+            SignalShutdownStarted();
 
             await base.StopAsync(cancellationToken);
 
@@ -119,6 +115,10 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     _logger.LogError(ex, "// {Class} // Failed to commit last batch safe offsets during shutdown", GetType().Name);
                 }
             }
+
+            _kafkaConsumer.Unsubscribe();
+
+            _logger.LogInformation("// {Class} // unsubscribed from topic {Topic} because shutdown is initiated ", GetType().Name, ComputeTopicFingerprint(_subscribedTopicName));
 
             if (!IsConsumerClosed)
             {
@@ -293,7 +293,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 })
                 .SetPartitionsRevokedHandler((_, partitions) =>
                 {
-                    if (IsConsumerClosed)
+                    if (IsShutdownStarted || IsConsumerClosed)
                     {
                         return;
                     }
@@ -303,7 +303,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                     .Where(offsetEntry => partitions.Any(revokedPartition => revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
                     .ToList();
 
-                    if (revokedPartitionOffsets.Count > 0 && !IsShutdownStarted)
+                    if (revokedPartitionOffsets.Count > 0)
                     {
                         try
                         {

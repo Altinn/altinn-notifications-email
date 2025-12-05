@@ -56,94 +56,13 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GivenConsumerIsStopping_ThenStopCompletesPromptly()
-    {
-        // Arrange
-        var processedSignal = new ManualResetEventSlim(false);
-        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
-        var sendingServiceMock = CreateSendingServiceMock(processedSignal);
-
-        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
-        using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
-
-        var firstEmail = new Core.Sending.Email(Guid.NewGuid(), "subject-1", "body-1", "from-1", "to-1", EmailContentType.Plain);
-
-        // Act
-        await consumer.StartAsync(CancellationToken.None);
-        await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail));
-        Assert.True(
-            await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50)),
-            "First email was not processed within the expected time window.");
-
-        var stopwatch = Stopwatch.StartNew();
-        using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await consumer.StopAsync(stopTimeout.Token);
-        stopwatch.Stop();
-
-        // Assert
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), "StopAsync took too long, suggesting internal cancellation was not signaled.");
-        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task GivenBatchOfMessages_ThenProcessingRunsInParallel_NotSequential()
-    {
-        // Arrange: delay per message to observe parallel effect
-        var processedCount = 0;
-        var allProcessedSignal = new ManualResetEventSlim(false);
-        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
-
-        var sendingServiceMock = new Mock<ISendingService>();
-        sendingServiceMock
-            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
-            .Returns(async () =>
-            {
-                Interlocked.Increment(ref processedCount);
-                await Task.Delay(300); // simulated per-message work
-                if (Volatile.Read(ref processedCount) >= 20)
-                {
-                    allProcessedSignal.Set();
-                }
-            });
-
-        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
-        using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
-
-        // Create 20 messages to form a batch
-        var emails = Enumerable.Range(0, 20)
-            .Select(i => new Core.Sending.Email(Guid.NewGuid(), $"subject-{i}", $"body-{i}", "from", "to", EmailContentType.Plain))
-            .ToList();
-
-        // Act
-        await consumer.StartAsync(CancellationToken.None);
-        var stopwatch = Stopwatch.StartNew();
-
-        foreach (var email in emails)
-        {
-            await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
-        }
-
-        Assert.True(
-            await WaitForConditionAsync(() => allProcessedSignal.IsSet, TimeSpan.FromSeconds(6), TimeSpan.FromMilliseconds(50)),
-            "Batch was not processed within expected time.");
-
-        stopwatch.Stop();
-        await consumer.StopAsync(CancellationToken.None);
-
-        // Assert: sequential would be ~6s (20 * 300ms); parallel should be far lower
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3.5), $"Processing did not appear parallel. Elapsed={stopwatch.Elapsed.TotalMilliseconds}ms");
-        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(20));
-    }
-
-    [Fact]
     public async Task GivenValidEmailMessage_WhenConsumed_ThenSendingServiceIsCalledOnce()
     {
         // Arrange
         var processedSignal = new ManualResetEventSlim(false);
-        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
         var sendingServiceMock = CreateSendingServiceMock(processedSignal);
 
-        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object);
         using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
 
         var email = new Core.Sending.Email(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
@@ -161,14 +80,13 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GivenInvalidEmailMessage_WhenConsumed_ThenSendingServiceIsNeverCalled()
+    public async Task GivenInvalidEmailMessage_WhenConsumed_ThenSendingServiceIsNotCalled()
     {
         // Arrange
         var processedSignal = new ManualResetEventSlim(false);
-        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
         var sendingServiceMock = CreateSendingServiceMock(processedSignal);
 
-        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object);
         using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
 
         // Act
@@ -184,14 +102,75 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GivenMultipleMessages_ThenProcessedConcurrently_WithinExpectedTimeframe()
+    {
+        var concurrentExecutions = 0;
+        var processedMessagesCount = 0;
+        var maxConcurrentExecutions = 0;
+        var allMessagesProcessedSignal = new ManualResetEventSlim(false);
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Returns(async () =>
+            {
+                var currentConcurrent = Interlocked.Increment(ref concurrentExecutions);
+
+                var currentMax = Volatile.Read(ref maxConcurrentExecutions);
+                while (currentConcurrent > currentMax)
+                {
+                    var originalMax = Interlocked.CompareExchange(ref maxConcurrentExecutions, currentConcurrent, currentMax);
+                    if (originalMax == currentMax)
+                    {
+                        break;
+                    }
+
+                    currentMax = Volatile.Read(ref maxConcurrentExecutions);
+                }
+
+                await Task.Delay(250); // Simulated email processing.
+
+                Interlocked.Decrement(ref concurrentExecutions);
+
+                if (Interlocked.Increment(ref processedMessagesCount) >= 50)
+                {
+                    allMessagesProcessedSignal.Set();
+                }
+            });
+
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object);
+        using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
+
+        var emails = Enumerable.Range(0, 50)
+            .Select(i => new Core.Sending.Email(Guid.NewGuid(), $"subject-{i}", $"body-{i}", "from", "to", EmailContentType.Plain))
+            .ToList();
+
+        // Act
+        await consumer.StartAsync(CancellationToken.None);
+
+        foreach (var email in emails)
+        {
+            await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        }
+
+        var isProcessed = await WaitForConditionAsync(() => allMessagesProcessedSignal.IsSet, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(25));
+
+        await consumer.StopAsync(CancellationToken.None);
+
+        // Assert
+        Assert.True(isProcessed, "All messages were not processed within expected time.");
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(50));
+        Assert.True(maxConcurrentExecutions > 1, $"Expected concurrent execution, but max concurrent was only {maxConcurrentExecutions}");
+    }
+
+    [Fact]
     public async Task GivenStartedConsumer_WhenMessageProduced_ThenConfiguredTopicIsSubscribed()
     {
         // Arrange
         var processedSignal = new ManualResetEventSlim(false);
-        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
         var sendingServiceMock = CreateSendingServiceMock(processedSignal);
 
-        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object);
         using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
 
         var email = new Core.Sending.Email(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
@@ -208,72 +187,104 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GivenActiveConsumerProcessingMessages_WhenStopAsyncCalled_ThenStopCompletesPromptly()
+    {
+        // Arrange
+        var processedSignal = new ManualResetEventSlim(false);
+        var sendingServiceMock = CreateSendingServiceMock(processedSignal);
+
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object);
+        using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
+
+        var email = new Core.Sending.Email(Guid.NewGuid(), "subject-1", "body-1", "from-1", "to-1", EmailContentType.Plain);
+
+        // Act
+        await consumer.StartAsync(CancellationToken.None);
+        await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        var isProcessed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+
+        var stopwatch = Stopwatch.StartNew();
+        using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await consumer.StopAsync(stopTimeout.Token);
+        stopwatch.Stop();
+
+        // Assert
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
+        Assert.True(isProcessed, "First email was not processed within the expected time window");
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), "StopAsync took too long, suggesting internal cancellation was not signaled.");
+    }
+
+    [Fact]
     public async Task GivenShutdown_ThenLastBatchSafeOffsetsCommittedOnce_AndPendingMessageProcessedAfterRestart()
     {
         // Arrange
+        var firstEmailNotificationIdentifer = Guid.NewGuid();
         var firstProcessedSignal = new ManualResetEventSlim(false);
-        var allowSecondProcessing = new SemaphoreSlim(0, 1);
+
+        var secondEmailNotificationIdentifer = Guid.NewGuid();
         var secondProcessedSignal = new ManualResetEventSlim(false);
+
+        var allowSecondProcessing = new SemaphoreSlim(0, 1);
         var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
 
         var sendingServiceMock = new Mock<ISendingService>();
         sendingServiceMock
-            .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "first")))
+            .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(e => e.NotificationId == firstEmailNotificationIdentifer)))
             .Callback(firstProcessedSignal.Set)
             .Returns(Task.CompletedTask);
 
         sendingServiceMock
-            .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "second")))
+            .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(e => e.NotificationId == secondEmailNotificationIdentifer)))
             .Callback(async () =>
             {
                 await allowSecondProcessing.WaitAsync(TimeSpan.FromSeconds(10));
+
                 secondProcessedSignal.Set();
             })
             .Returns(Task.CompletedTask);
 
-        using SendEmailQueueConsumer consumer1 = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using SendEmailQueueConsumer firstConsumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
         using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
 
-        var firstEmail = new Core.Sending.Email(Guid.NewGuid(), "first", "body-1", "from", "to", EmailContentType.Plain);
-        var secondEmail = new Core.Sending.Email(Guid.NewGuid(), "second", "body-2", "from", "to", EmailContentType.Plain);
+        var firstEmail = new Core.Sending.Email(firstEmailNotificationIdentifer, "first", "body-1", "from", "to", EmailContentType.Plain);
+        var secondEmail = new Core.Sending.Email(secondEmailNotificationIdentifer, "second", "body-2", "from", "to", EmailContentType.Plain);
 
-        // Act: start and produce two messages
-        await consumer1.StartAsync(CancellationToken.None);
+        // Act
+        await firstConsumer.StartAsync(CancellationToken.None);
+
         await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail));
         await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(secondEmail));
 
-        Assert.True(
-            await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50)),
-            "First email was not processed within the expected time window.");
+        var firstProcessed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
-        await consumer1.StopAsync(CancellationToken.None);
+        await firstConsumer.StopAsync(CancellationToken.None);
 
-        // Verify the shutdown commit log appeared exactly once
         loggerMock.Verify(
-            l => l.Log(
+           e => e.Log(
                 It.Is<LogLevel>(e => e == LogLevel.Information),
                 It.IsAny<EventId>(),
                 It.Is<It.IsAnyType>((state, t) => state.ToString()!.Contains("Committed last batch safe offsets for processed messages during shutdown")),
                 It.IsAny<Exception?>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Once);
+           Times.Once);
 
-        // Restart and process pending second message
         allowSecondProcessing.Release();
 
-        using SendEmailQueueConsumer consumer2 = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
-        await consumer2.StartAsync(CancellationToken.None);
+        using SendEmailQueueConsumer secondConsumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
 
-        Assert.True(
-            await WaitForConditionAsync(() => secondProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50)),
-            "Second email was not processed after restart, indicating offsets may have been committed beyond the contiguous boundary.");
+        await secondConsumer.StartAsync(CancellationToken.None);
+        
+        var secondProcessed = await WaitForConditionAsync(() => secondProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
-        await consumer2.StopAsync(CancellationToken.None);
+        await secondConsumer.StopAsync(CancellationToken.None);
 
         // Assert
+        Assert.True(firstProcessed, "First email was not processed within the expected time window.");
         sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(2));
         sendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "first")), Times.Once);
         sendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "second")), Times.Once);
+        Assert.True(secondProcessed, "Second email was not processed after restart, indicating offsets may have been committed beyond the contiguous boundary.");
+
     }
 
     [Fact]
@@ -281,34 +292,30 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     {
         // Arrange
         var firstProcessedSignal = new ManualResetEventSlim(false);
-        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
         var sendingServiceMock = CreateSendingServiceMock(firstProcessedSignal);
 
-        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
+        using SendEmailQueueConsumer consumer = GetEmailSendingConsumer(sendingServiceMock.Object);
         using CommonProducer producer = KafkaUtil.GetKafkaProducer(_serviceProvider!);
 
         var firstEmail = new Core.Sending.Email(Guid.NewGuid(), "first", "body-1", "from-1", "to-1", EmailContentType.Plain);
         var afterStopEmail = new Core.Sending.Email(Guid.NewGuid(), "after", "body-3", "from-3", "to-3", EmailContentType.Plain);
         var duringShutdownEmail = new Core.Sending.Email(Guid.NewGuid(), "during", "body-2", "from-2", "to-2", EmailContentType.Plain);
 
-        // Act: process first
+        // Act
         await consumer.StartAsync(CancellationToken.None);
         await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail));
-        Assert.True(
-            await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50)),
-            "First email was not processed within the expected time window.");
-
-        // Initiate shutdown and produce during shutdown
+        var isFirstProcessed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+     
         var stopTask = consumer.StopAsync(CancellationToken.None);
         await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(duringShutdownEmail));
         await stopTask;
 
-        // Produce after stop
         await producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(afterStopEmail));
         await Task.Delay(TimeSpan.FromSeconds(1));
 
-        // Assert: only first was processed
+        // Assert
         sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
+        Assert.True(isFirstProcessed, "First email was not processed within the expected time window.");
     }
 
     [Fact]
@@ -435,15 +442,19 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     /// <exception cref="Xunit.Sdk.XunitException">
     /// Thrown when the consumer instance cannot be resolved from the service provider.
     /// </exception>
-    private SendEmailQueueConsumer GetEmailSendingConsumer(ISendingService sendingService, ILogger<SendEmailQueueConsumer> sendEmailQueueConsumerLogger)
+    private SendEmailQueueConsumer GetEmailSendingConsumer(ISendingService sendingService, ILogger<SendEmailQueueConsumer>? sendEmailQueueConsumerLogger = null)
     {
         IServiceCollection services = new ServiceCollection()
            .AddLogging()
            .AddSingleton(_kafkaSettings)
            .AddSingleton(sendingService)
            .AddHostedService<SendEmailQueueConsumer>()
-           .AddSingleton(sendEmailQueueConsumerLogger)
            .AddSingleton<ICommonProducer, CommonProducer>();
+
+        if (sendEmailQueueConsumerLogger != null)
+        {
+            services.AddSingleton(sendEmailQueueConsumerLogger);
+        }
 
         _serviceProvider = services.BuildServiceProvider();
 

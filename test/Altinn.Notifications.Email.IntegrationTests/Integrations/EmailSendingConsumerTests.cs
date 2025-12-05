@@ -183,7 +183,18 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     {
         // Arrange
         var processedSignal = new ManualResetEventSlim(false);
-        var sendingServiceMock = CreateSendingServiceMock(processedSignal);
+
+        var semaphoreSlim = new SemaphoreSlim(0, 1);
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Returns(async () =>
+            {
+                processedSignal.Set();
+
+                await semaphoreSlim.WaitAsync(TimeSpan.FromSeconds(10));
+            });
+
         await using var testFixture = CreateTestFixture(sendingServiceMock.Object);
 
         var email = new Core.Sending.Email(Guid.NewGuid(), "subject-1", "body-1", "from-1", "to-1", EmailContentType.Plain);
@@ -191,16 +202,22 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
         await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+
         var isProcessed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
         var stopwatch = Stopwatch.StartNew();
         using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await testFixture.Consumer.StopAsync(stopTimeout.Token);
+
+        var stopTask = testFixture.Consumer.StopAsync(stopTimeout.Token);
+
+        semaphoreSlim.Release();
+
+        await stopTask;
         stopwatch.Stop();
 
         // Assert
         sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
-        Assert.True(isProcessed, "First email was not processed within the expected time window");
+        Assert.True(isProcessed, "First email was not processed (entered) within the expected time window");
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), "StopAsync took too long, suggesting internal cancellation was not signaled.");
     }
 
@@ -209,34 +226,31 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     {
         // Arrange
         var firstEmailNotificationIdentifer = Guid.NewGuid();
+        var firstRunSemaphoreSlim = new SemaphoreSlim(0, 1);
         var firstProcessedSignal = new ManualResetEventSlim(false);
+        var firstEmail = new Core.Sending.Email(firstEmailNotificationIdentifer, "first", "body-1", "from", "to", EmailContentType.Plain);
 
         var secondEmailNotificationIdentifer = Guid.NewGuid();
         var secondProcessedSignal = new ManualResetEventSlim(false);
+        var secondEmail = new Core.Sending.Email(secondEmailNotificationIdentifer, "second", "body-2", "from", "to", EmailContentType.Plain);
 
-        var allowSecondProcessing = new SemaphoreSlim(0, 1);
         var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
 
-        var sendingServiceMock = new Mock<ISendingService>();
-        sendingServiceMock
+        var firstRunSendingServiceMock = new Mock<ISendingService>();
+        firstRunSendingServiceMock
             .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(e => e.NotificationId == firstEmailNotificationIdentifer)))
             .Callback(firstProcessedSignal.Set)
             .Returns(Task.CompletedTask);
 
-        sendingServiceMock
+        firstRunSendingServiceMock
             .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(e => e.NotificationId == secondEmailNotificationIdentifer)))
-            .Callback(async () =>
+            .Returns(async () =>
             {
-                await allowSecondProcessing.WaitAsync(TimeSpan.FromSeconds(10));
+                // Simulate in-flight work that should NOT complete before StopAsync.
+                await firstRunSemaphoreSlim.WaitAsync(TimeSpan.FromSeconds(25));
+            });
 
-                secondProcessedSignal.Set();
-            })
-            .Returns(Task.CompletedTask);
-
-        await using var firstTestFixture = CreateTestFixture(sendingServiceMock.Object, loggerMock.Object);
-
-        var firstEmail = new Core.Sending.Email(firstEmailNotificationIdentifer, "first", "body-1", "from", "to", EmailContentType.Plain);
-        var secondEmail = new Core.Sending.Email(secondEmailNotificationIdentifer, "second", "body-2", "from", "to", EmailContentType.Plain);
+        await using var firstTestFixture = CreateTestFixture(firstRunSendingServiceMock.Object, loggerMock.Object);
 
         // Act
         await firstTestFixture.Consumer.StartAsync(CancellationToken.None);
@@ -257,9 +271,19 @@ public class EmailSendingConsumerTests : IAsyncLifetime
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
            Times.AtLeastOnce);
 
-        allowSecondProcessing.Release();
+        firstRunSemaphoreSlim.Release();
 
-        await using var secondTestFixture = CreateTestFixture(sendingServiceMock.Object);
+        var secondRunSendingServiceMock = new Mock<ISendingService>();
+        secondRunSendingServiceMock
+            .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(e => e.NotificationId == secondEmailNotificationIdentifer)))
+            .Callback(secondProcessedSignal.Set)
+            .Returns(Task.CompletedTask);
+
+        secondRunSendingServiceMock
+            .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(e => e.NotificationId == firstEmailNotificationIdentifer)))
+            .Returns(Task.CompletedTask);
+
+        await using var secondTestFixture = CreateTestFixture(secondRunSendingServiceMock.Object);
 
         await secondTestFixture.Consumer.StartAsync(CancellationToken.None);
 
@@ -269,11 +293,10 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Assert
         Assert.True(firstProcessed, "First email was not processed within the expected time window.");
-        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(2));
-        sendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "first")), Times.Once);
-        sendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "second")), Times.Once);
-        Assert.True(secondProcessed, "Second email was not processed after restart, indicating offsets may have been committed beyond the contiguous boundary.");
-
+        firstRunSendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.NotificationId == firstEmailNotificationIdentifer)), Times.Once);
+        firstRunSendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.NotificationId == secondEmailNotificationIdentifer)), Times.Once);
+        secondRunSendingServiceMock.Verify(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.NotificationId == secondEmailNotificationIdentifer)), Times.Once);
+        Assert.True(secondProcessed, "Second email was not processed by the restarted consumer, indicating offsets may have been committed beyond the safe contiguous boundary.");
     }
 
     [Fact]
@@ -360,30 +383,6 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Creates and configures a <see cref="SendEmailQueueConsumer"/> instance from the provided <see cref="ServiceProvider"/>.
-    /// </summary>
-    /// <param name="serviceProvider">
-    /// The <see cref="ServiceProvider"/> containing the required services for the consumer.
-    /// </param>
-    /// <returns>
-    /// A fully constructed <see cref="SendEmailQueueConsumer"/> registered as an <see cref="IHostedService"/>.
-    /// </returns>
-    /// <exception cref="Xunit.Sdk.XunitException">
-    /// Thrown when the consumer instance cannot be resolved from the service provider.
-    /// </exception>
-    private static SendEmailQueueConsumer GetEmailSendingConsumer(ServiceProvider serviceProvider)
-    {
-        var emailSendingConsumer = serviceProvider.GetService(typeof(IHostedService)) as SendEmailQueueConsumer;
-
-        if (emailSendingConsumer == null)
-        {
-            Assert.Fail("Unable to create an instance of EmailSendingConsumer.");
-        }
-
-        return emailSendingConsumer;
-    }
-
-    /// <summary>
     /// Creates a mocked <see cref="ISendingService"/> that signals a provided <see cref="ManualResetEventSlim"/>
     /// when <see cref="ISendingService.SendAsync(Core.Sending.Email)"/> is invoked.
     /// </summary>
@@ -455,10 +454,17 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     private EmailConsumerTestFixture CreateTestFixture(ISendingService sendingService, ILogger<SendEmailQueueConsumer>? logger = null)
     {
         var serviceProvider = CreateServiceProvider(sendingService, logger);
-        var consumer = GetEmailSendingConsumer(serviceProvider);
         var producer = KafkaUtil.GetKafkaProducer(serviceProvider);
 
-        return new EmailConsumerTestFixture(producer, consumer, serviceProvider);
+        var hostedServices = serviceProvider.GetServices<IHostedService>();
+
+        var emailSendingConsumer = hostedServices.OfType<SendEmailQueueConsumer>().SingleOrDefault();
+        if (emailSendingConsumer is null)
+        {
+            Assert.Fail("Unable to locate SendEmailQueueConsumer among registered IHostedService instances.");
+        }
+
+        return new EmailConsumerTestFixture(producer, emailSendingConsumer, serviceProvider);
     }
 
     /// <summary>

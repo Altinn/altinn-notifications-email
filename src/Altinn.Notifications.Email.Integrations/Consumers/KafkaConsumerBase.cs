@@ -31,7 +31,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private volatile KafkaBatchState? _lastProcessedBatch;
         private readonly IConsumer<string, string> _kafkaConsumer;
         private CancellationTokenSource? _internalCancellationSource;
-        
+
         private const string _metricsTopicTag = "topic";
         private static readonly Meter _meter = new("Altinn.Notifications.KafkaConsumer", "1.0.0");
         private static readonly Counter<int> _messagesPolledCounter = _meter.CreateCounter<int>("kafka.consumer.polled");
@@ -102,8 +102,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             SignalShutdownStarted();
 
-            await base.StopAsync(cancellationToken);
-
             var lastBatchSafeOffsets = _lastProcessedBatch != null ? CalculateContiguousCommitOffsets(_lastProcessedBatch) : [];
             if (lastBatchSafeOffsets.Count > 0 && !IsConsumerClosed)
             {
@@ -113,11 +111,17 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
                     _logger.LogInformation("// {Class} // Committed last batch safe offsets for processed messages during shutdown", GetType().Name);
                 }
+                catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+                {
+                    _logger.LogWarning(ex, "// {Class} // Commit during shutdown skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+                }
                 catch (KafkaException ex)
                 {
                     _logger.LogError(ex, "// {Class} // Failed to commit last batch safe offsets during shutdown", GetType().Name);
                 }
             }
+
+            await base.StopAsync(cancellationToken);
 
             _kafkaConsumer.Unsubscribe();
 
@@ -420,42 +424,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private void ResetBatchProcessingFailureSignal() => Interlocked.Exchange(ref _batchFailureFlag, 0);
 
         /// <summary>
-        /// Commits the highest contiguous offsets from the last processed batch for partitions being revoked.
-        /// </summary>
-        /// <param name="revokedPartitionOffset">
-        /// The list of partitions being revoked by Kafka during a group rebalance.
-        /// </param>
-        private void CommitLastBatchSafeOffsetsForRevokedPartitions(List<TopicPartitionOffset> revokedPartitionOffset)
-        {
-            var lastBatchSafeOffsets = _lastProcessedBatch != null
-                ? CalculateContiguousCommitOffsets(_lastProcessedBatch)
-                : [];
-
-            var revokedPartitionOffsets = lastBatchSafeOffsets
-                .Where(offsetEntry => revokedPartitionOffset.Any(revokedPartition =>
-                    revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
-                .ToList();
-
-            if (revokedPartitionOffsets.Count == 0)
-            {
-                return;
-            }
-
-            try
-            {
-                _kafkaConsumer.Commit(revokedPartitionOffsets);
-            }
-            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
-            {
-                _logger.LogWarning(ex, "// {Class} // Commit on revocation skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
-            }
-            catch (KafkaException ex)
-            {
-                _logger.LogError(ex, "// {Class} // Commit on revocation failed unexpectedly", GetType().Name);
-            }
-        }
-
-        /// <summary>
         /// Calculates the highest contiguous commit offsets for each partition by identifying the longest sequence 
         /// of successfully processed messages starting from the earliest polled offset in the batch.
         /// Ensures Kafka offset commit safety by preventing gaps in message acknowledgment that could lead to message loss or duplication.
@@ -518,6 +486,42 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         }
 
         /// <summary>
+        /// Commits the highest contiguous offsets from the last processed batch for partitions being revoked.
+        /// </summary>
+        /// <param name="revokedPartitionOffset">
+        /// The list of partitions being revoked by Kafka during a group rebalance.
+        /// </param>
+        private void CommitLastBatchSafeOffsetsForRevokedPartitions(List<TopicPartitionOffset> revokedPartitionOffset)
+        {
+            var lastBatchSafeOffsets = _lastProcessedBatch != null
+                ? CalculateContiguousCommitOffsets(_lastProcessedBatch)
+                : [];
+
+            var revokedPartitionOffsets = lastBatchSafeOffsets
+                .Where(offsetEntry => revokedPartitionOffset.Any(revokedPartition =>
+                    revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
+                .ToList();
+
+            if (revokedPartitionOffsets.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _kafkaConsumer.Commit(revokedPartitionOffsets);
+            }
+            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+            {
+                _logger.LogWarning(ex, "// {Class} // Commit on revocation skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+            }
+            catch (KafkaException ex)
+            {
+                _logger.LogError(ex, "// {Class} // Commit on revocation failed unexpectedly", GetType().Name);
+            }
+        }
+
+        /// <summary>
         /// Processes a batch of Kafka messages concurrently using parallel execution with built-in retry logic and error handling.
         /// Each message is processed independently, and successfully processed messages contribute their offsets to the commit-ready collection.
         /// Processing stops gracefully when cancellation is requested or the consumer is shutting down.
@@ -561,9 +565,9 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 await Parallel.ForEachAsync(
                     processingContext.PolledConsumeResults,
                     concurrencyConfiguration,
-                    async (consumeResult, cancellationToken) =>
+                    async (consumeResult, stoppingToken) =>
                     {
-                        var processedOffset = await ProcessMessageAsync(consumeResult, processMessageFunc, retryMessageFunc, cancellationToken);
+                        var processedOffset = await ProcessMessageAsync(consumeResult, processMessageFunc, retryMessageFunc, stoppingToken);
 
                         if (processedOffset != null)
                         {

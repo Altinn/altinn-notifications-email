@@ -244,6 +244,28 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GivenKafkaMessageWithNullValue_WhenConsumed_ThenOffsetAdvancedAndNoProcessing()
+    {
+        // Arrange
+        var processedSignal = new ManualResetEventSlim(false);
+        var sendingServiceMock = CreateSendingServiceMock(processedSignal);
+        await using var testFixture = CreateTestFixture(sendingServiceMock.Object);
+
+        // Act
+        await testFixture.Consumer.StartAsync(CancellationToken.None);
+
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, null!);
+
+        bool anyProcessed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(50));
+
+        await testFixture.Consumer.StopAsync(CancellationToken.None);
+
+        // Assert
+        Assert.False(anyProcessed, "No message should be processed when Kafka message value is null.");
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Never);
+    }
+
+    [Fact]
     public async Task GivenPartitionRevocationWithRebalanceInProgress_ThenWarningLoggedAndCommitSkipped()
     {
         // Arrange
@@ -279,6 +301,32 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             .ToList();
 
         Assert.True(commitLogs.Count > 0, "Expected some form of commit logging to occur");
+    }
+
+    [Fact]
+    public async Task GivenCancellationBeforeProcessingStarts_WhenMessageProduced_ThenNoProcessingOccurs()
+    {
+        // Arrange
+        var processedSignal = new ManualResetEventSlim(false);
+        var sendingServiceMock = CreateSendingServiceMock(processedSignal);
+        await using var testFixture = CreateTestFixture(sendingServiceMock.Object);
+
+        var email = new Core.Sending.Email(Guid.NewGuid(), "cancel-test", "body", "from", "to", EmailContentType.Plain);
+
+        // Act
+        await testFixture.Consumer.StartAsync(CancellationToken.None);
+
+        var stopTask = testFixture.Consumer.StopAsync(CancellationToken.None);
+
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+
+        await stopTask;
+
+        bool processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(50));
+
+        // Assert
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Never);
+        Assert.False(processed, "No message should be processed when cancellation is already requested before processing starts.");
     }
 
     [Fact]

@@ -1,6 +1,4 @@
-﻿using System.Collections.Immutable;
-
-using Confluent.Kafka;
+﻿using Confluent.Kafka;
 
 namespace Altinn.Notifications.Email.Integrations.Consumers;
 
@@ -12,10 +10,10 @@ public sealed record KafkaBatchState
     /// <summary>
     /// The commit-ready offsets for successfully processed messages. Contains the next offset (original + 1) for each successfully processed message.
     /// </summary>
-    public IImmutableList<TopicPartitionOffset> CommitReadyOffsets { get; init; } = [];
+    public IList<TopicPartitionOffset> CommitReadyOffsets { get; init; } = [];
 
     /// <summary>
     /// The messages retrieved from Kafka during the batch polling operation.
     /// </summary>
-    public IImmutableList<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
+    public IList<ConsumeResult<string, string>> PolledConsumeResults { get; init; } = [];
 }

@@ -335,7 +335,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         /// May contain multiple offset entries per partition from concurrent message processing, which are automatically
         /// normalized to ensure only the highest safe offset per partition is committed to Kafka.
         /// </param>
-        private void CommitNormalizedOffsets(IList<TopicPartitionOffset> offsetsToCommit)
+        private void CommitNormalizedOffsets(List<TopicPartitionOffset> offsetsToCommit)
         {
             if (offsetsToCommit is null || offsetsToCommit.Count == 0 || IsShutdownStarted || IsConsumerClosed)
             {

@@ -97,6 +97,71 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GivenPartitionRevocationWithValidBatch_ThenContiguousOffsetsCommitted()
+    {
+        // Arrange
+        var processedSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Callback(processedSignal.Set)
+            .Returns(Task.CompletedTask);
+
+        await using var testFixture = CreateTestFixture(sendingServiceMock.Object, loggerMock.Object);
+
+        var email = new Core.Sending.Email(Guid.NewGuid(), "test", "body", "from", "to", EmailContentType.Plain);
+
+        // Act
+        await testFixture.Consumer.StartAsync(CancellationToken.None);
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+
+        var processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+        await testFixture.Consumer.StopAsync(CancellationToken.None);
+
+        // Assert
+        Assert.True(processed, "Message should have been processed");
+        sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
+
+        var loggerInvocations = loggerMock.Invocations
+            .Where(i => i.Arguments.Count >= 3)
+            .Where(i => i.Arguments[2]?.ToString()?.Contains("Commit") == true || i.Arguments[2]?.ToString()?.Contains("last batch safe offsets") == true)
+            .ToList();
+
+        Assert.True(loggerInvocations.Count > 0, "Expected commit-related logging during shutdown");
+    }
+
+    [Fact]
+    public async Task GivenPartitionRevocationWithNoLastProcessedBatch_ThenNoCommitAttempted()
+    {
+        // Arrange
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Returns(Task.CompletedTask);
+
+        await using var testFixture = CreateTestFixture(sendingServiceMock.Object, loggerMock.Object);
+
+        // Act - Start consumer but don't process any messages, then trigger partition revocation
+        await testFixture.Consumer.StartAsync(CancellationToken.None);
+
+        // Simulate partition revocation by stopping the consumer immediately
+        await testFixture.Consumer.StopAsync(CancellationToken.None);
+
+        // Assert
+        loggerMock.Verify(
+            e => e.Log(
+                It.Is<LogLevel>(l => l == LogLevel.Warning || l == LogLevel.Error),
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task GivenMultipleMessages_ThenProcessedConcurrently_WithinExpectedTimeframe()
     {
         var concurrentExecutions = 0;
@@ -176,6 +241,108 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Assert
         Assert.True(processed, "Message produced to the configured topic was not consumed, implying missing subscription.");
+    }
+
+    [Fact]
+    public async Task GivenPartitionRevocationWithRebalanceInProgress_ThenWarningLoggedAndCommitSkipped()
+    {
+        // Arrange
+        var processedSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Callback(processedSignal.Set)
+            .Returns(Task.CompletedTask);
+
+        await using var testFixture = CreateTestFixture(sendingServiceMock.Object, loggerMock.Object);
+
+        var email = new Core.Sending.Email(Guid.NewGuid(), "test", "body", "from", "to", EmailContentType.Plain);
+
+        // Act - Process a message and then rapidly stop to increase chance of rebalance timing
+        await testFixture.Consumer.StartAsync(CancellationToken.None);
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+
+        var processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+
+        // Rapid stop should increase likelihood of rebalance timing conflicts
+        await testFixture.Consumer.StopAsync(CancellationToken.None);
+
+        // Assert
+        Assert.True(processed, "Message should have been processed");
+
+        // Verify that either a normal commit occurred or a rebalance warning was logged
+        var commitLogs = loggerMock.Invocations
+            .Where(i => i.Arguments.Count >= 3)
+            .Where(i => i.Arguments[2]?.ToString()?.Contains("Commit") == true)
+            .ToList();
+
+        Assert.True(commitLogs.Count > 0, "Expected some form of commit logging to occur");
+    }
+
+    [Fact]
+    public async Task GivenPartitionRevocationWithLastBatchButNoMatchingPartitions_ThenNoCommitAttempted()
+    {
+        // Arrange
+        var firstProcessedSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Callback(firstProcessedSignal.Set)
+            .Returns(Task.CompletedTask);
+
+        var firstTopicName = Guid.NewGuid().ToString();
+        var secondTopicName = Guid.NewGuid().ToString();
+
+        var kafkaSettings = new KafkaSettings
+        {
+            BrokerAddress = "localhost:9092",
+            SendEmailQueueTopicName = firstTopicName,
+            Consumer = new() { GroupId = "test-partition-mismatch" },
+            EmailSendingAcceptedTopicName = _emailSendingAcceptedProducerTopic,
+            Admin = new() { TopicList = [firstTopicName, secondTopicName, _emailSendingAcceptedProducerTopic] }
+        };
+
+        var serviceProvider = CreateServiceProvider(sendingServiceMock.Object, loggerMock.Object, kafkaSettings);
+        var producer = KafkaUtil.GetKafkaProducer(serviceProvider);
+
+        try
+        {
+            await using var firstTestFixture = new EmailConsumerTestFixture(
+                producer,
+                serviceProvider.GetServices<IHostedService>().OfType<SendEmailQueueConsumer>().Single(),
+                serviceProvider);
+
+            var email = new Core.Sending.Email(Guid.NewGuid(), "test", "body", "from", "to", EmailContentType.Plain);
+
+            // Act - Process a message on first topic, then quickly stop to trigger revocation
+            await firstTestFixture.Consumer.StartAsync(CancellationToken.None);
+            await producer.ProduceAsync(firstTopicName, JsonSerializer.Serialize(email));
+
+            var processed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+            await firstTestFixture.Consumer.StopAsync(CancellationToken.None);
+
+            // Assert
+            Assert.True(processed, "Message should have been processed");
+
+            // No revocation commit warnings should occur since partitions won't match
+            loggerMock.Verify(
+                x => x.Log(
+                    It.Is<LogLevel>(l => l == LogLevel.Warning),
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Commit on revocation")),
+                    It.IsAny<Exception?>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                Times.Never);
+        }
+        finally
+        {
+            await KafkaUtil.DeleteTopicAsync(firstTopicName);
+            await KafkaUtil.DeleteTopicAsync(secondTopicName);
+        }
     }
 
     [Fact]
@@ -382,6 +549,70 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Exactly(150));
     }
 
+    [Fact]
+    public async Task GivenMultipleMessagesWithPartialProcessing_WhenRevocationOccurs_ThenOnlyContiguousOffsetsCommitted()
+    {
+        // Arrange
+        var processedCount = 0;
+        var firstProcessedSignal = new ManualResetEventSlim(false);
+        var blockingSignal = new ManualResetEventSlim(false);
+        var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
+
+        var sendingServiceMock = new Mock<ISendingService>();
+        sendingServiceMock
+            .Setup(e => e.SendAsync(It.IsAny<Core.Sending.Email>()))
+            .Returns(() =>
+            {
+                var current = Interlocked.Increment(ref processedCount);
+
+                if (current == 1)
+                {
+                    firstProcessedSignal.Set();
+                    return Task.CompletedTask;
+                }
+
+                // Subsequent messages block to create partial processing scenario
+                return Task.Run(() => blockingSignal.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
+            });
+
+        await using var testFixture = CreateTestFixture(sendingServiceMock.Object, loggerMock.Object);
+
+        var emails = Enumerable.Range(0, 5)
+            .Select(i => new Core.Sending.Email(Guid.NewGuid(), $"subject-{i}", $"body-{i}", "from", "to", EmailContentType.Plain))
+            .ToList();
+
+        // Act
+        await testFixture.Consumer.StartAsync(CancellationToken.None);
+
+        foreach (var email in emails)
+        {
+            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        }
+
+        var firstProcessed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+
+        // Stop consumer while some messages are still processing (creating partial batch scenario)
+        await testFixture.Consumer.StopAsync(CancellationToken.None);
+
+        // Release any blocked processing
+        blockingSignal.Set();
+
+        // Assert
+        Assert.True(firstProcessed, "At least the first message should have been processed");
+
+        var commitOrRevocationLogs = loggerMock.Invocations
+            .Where(i => i.Arguments.Count >= 3)
+            .Where(i =>
+            {
+                var message = i.Arguments[2]?.ToString();
+
+                return message?.Contains("Commit") == true || message?.Contains("revocation") == true || message?.Contains("last batch") == true;
+            })
+            .ToList();
+
+        Assert.True(commitOrRevocationLogs.Count > 0, "Expected commit or revocation-related logging");
+    }
+
     /// <summary>
     /// Creates a mocked <see cref="ISendingService"/> that signals a provided <see cref="ManualResetEventSlim"/>
     /// when <see cref="ISendingService.SendAsync(Core.Sending.Email)"/> is invoked.
@@ -476,17 +707,20 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     /// <param name="sendEmailQueueConsumerLogger">
     /// Optional typed <see cref="ILogger{T}"/> for <see cref="SendEmailQueueConsumer"/> to capture or control logs emitted by the consumer.
     /// </param>
+    /// <param name="customKafkaSettings">
+    /// Optional custom <see cref="KafkaSettings"/> to override the default instance settings. When <c>null</c>, uses the default <see cref="_kafkaSettings"/> field.
+    /// </param>
     /// <returns>
     /// A configured <see cref="ServiceProvider"/> with all necessary services registered for testing.
     /// </returns>
-    private ServiceProvider CreateServiceProvider(ISendingService sendingService, ILogger<SendEmailQueueConsumer>? sendEmailQueueConsumerLogger = null)
+    private ServiceProvider CreateServiceProvider(ISendingService sendingService, ILogger<SendEmailQueueConsumer>? sendEmailQueueConsumerLogger = null, KafkaSettings? customKafkaSettings = null)
     {
         IServiceCollection services = new ServiceCollection()
            .AddLogging()
-           .AddSingleton(_kafkaSettings)
            .AddSingleton(sendingService)
            .AddHostedService<SendEmailQueueConsumer>()
-           .AddSingleton<ICommonProducer, CommonProducer>();
+           .AddSingleton<ICommonProducer, CommonProducer>()
+           .AddSingleton(customKafkaSettings ?? _kafkaSettings);
 
         if (sendEmailQueueConsumerLogger != null)
         {

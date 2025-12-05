@@ -164,7 +164,16 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 if (batchState.PolledConsumeResults.Count == 0)
                 {
                     batchProcessingTimer.Stop();
-                    await Task.Delay(10, linkedCancellationToken);
+
+                    try
+                    {
+                        await Task.Delay(50, linkedCancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 

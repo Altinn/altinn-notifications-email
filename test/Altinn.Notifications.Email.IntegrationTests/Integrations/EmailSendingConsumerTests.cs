@@ -405,9 +405,9 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     /// </remarks>
     private static async Task<bool> WaitForConditionAsync(Func<bool> condition, TimeSpan timeout, TimeSpan pollInterval)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var stopwatch = Stopwatch.StartNew();
 
-        while (DateTime.UtcNow < deadline)
+        while (stopwatch.Elapsed < timeout)
         {
             if (condition())
             {

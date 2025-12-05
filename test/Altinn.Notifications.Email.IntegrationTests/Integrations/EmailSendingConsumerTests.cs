@@ -212,7 +212,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
     {
         // Arrange
         var firstProcessedSignal = new ManualResetEventSlim(false);
-        var allowSecondProcessing = new ManualResetEventSlim(false);
+        var allowSecondProcessing = new SemaphoreSlim(0, 1);
         var secondProcessedSignal = new ManualResetEventSlim(false);
         var loggerMock = new Mock<ILogger<SendEmailQueueConsumer>>();
 
@@ -226,7 +226,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "second")))
             .Callback(async () =>
             {
-                await Task.Run(() => allowSecondProcessing.Wait(TimeSpan.FromSeconds(10)));
+                await allowSecondProcessing.WaitAsync(TimeSpan.FromSeconds(10));
                 secondProcessedSignal.Set();
             })
             .Returns(Task.CompletedTask);
@@ -259,7 +259,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             Times.Once);
 
         // Restart and process pending second message
-        allowSecondProcessing.Set();
+        allowSecondProcessing.Release();
 
         using SendEmailQueueConsumer consumer2 = GetEmailSendingConsumer(sendingServiceMock.Object, loggerMock.Object);
         await consumer2.StartAsync(CancellationToken.None);

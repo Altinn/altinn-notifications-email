@@ -74,6 +74,8 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                 _internalCancellationSource?.Dispose();
 
                 base.Dispose();
+
+                GC.SuppressFinalize(this);
             }
         }
 

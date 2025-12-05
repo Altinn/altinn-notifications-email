@@ -314,7 +314,31 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
                         return;
                     }
 
-                    CommitLastBatchSafeOffsetsForRevokedPartitions(partitions);
+                    var lastBatchSafeOffsets = _lastProcessedBatch != null
+                        ? CalculateContiguousCommitOffsets(_lastProcessedBatch.CommitReadyOffsets, _lastProcessedBatch.PolledConsumeResults)
+                        : [];
+
+                    var revokedPartitionOffsets = lastBatchSafeOffsets
+                        .Where(offsetEntry => partitions.Any(revokedPartition => revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
+                        .ToList();
+
+                    if (revokedPartitionOffsets.Count == 0)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        _kafkaConsumer.Commit(revokedPartitionOffsets);
+                    }
+                    catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
+                    {
+                        _logger.LogWarning(ex, "// {Class} // Commit on revocation skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
+                    }
+                    catch (KafkaException ex)
+                    {
+                        _logger.LogError(ex, "// {Class} // Commit on revocation failed unexpectedly", GetType().Name);
+                    }
 
                     _logger.LogInformation("// {Class} // Partitions revoked: {Partitions}", GetType().Name, string.Join(',', partitions.Select(e => e.Partition.Value)));
                 })
@@ -428,42 +452,6 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
             }
 
             return [.. batchMessageCollection];
-        }
-
-        /// <summary>
-        /// Commits the highest contiguous offsets from the last processed batch for partitions being revoked.
-        /// </summary>
-        /// <param name="revokedPartitionOffset">
-        /// The list of partitions being revoked by Kafka during a group rebalance.
-        /// </param>
-        private void CommitLastBatchSafeOffsetsForRevokedPartitions(List<TopicPartitionOffset> revokedPartitionOffset)
-        {
-            var lastBatchSafeOffsets = _lastProcessedBatch != null
-                ? CalculateContiguousCommitOffsets(_lastProcessedBatch.CommitReadyOffsets, _lastProcessedBatch.PolledConsumeResults)
-                : [];
-
-            var revokedPartitionOffsets = lastBatchSafeOffsets
-                .Where(offsetEntry => revokedPartitionOffset.Any(revokedPartition =>
-                    revokedPartition.TopicPartition.Equals(offsetEntry.TopicPartition)))
-                .ToList();
-
-            if (revokedPartitionOffsets.Count == 0)
-            {
-                return;
-            }
-
-            try
-            {
-                _kafkaConsumer.Commit(revokedPartitionOffsets);
-            }
-            catch (KafkaException ex) when (ex.Error.Code is ErrorCode.RebalanceInProgress or ErrorCode.IllegalGeneration)
-            {
-                _logger.LogWarning(ex, "// {Class} // Commit on revocation skipped due to transient state: {Reason}", GetType().Name, ex.Error.Reason);
-            }
-            catch (KafkaException ex)
-            {
-                _logger.LogError(ex, "// {Class} // Commit on revocation failed unexpectedly", GetType().Name);
-            }
         }
 
         /// <summary>

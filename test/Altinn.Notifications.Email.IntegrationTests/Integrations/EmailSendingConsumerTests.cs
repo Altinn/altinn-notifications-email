@@ -46,11 +46,6 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_serviceProvider != null)
-        {
-            await _serviceProvider.DisposeAsync();
-        }
-
         await KafkaUtil.DeleteTopicAsync(_emailSendingConsumerTopic);
         await KafkaUtil.DeleteTopicAsync(_emailSendingAcceptedProducerTopic);
     }
@@ -229,13 +224,9 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         sendingServiceMock
             .Setup(e => e.SendAsync(It.Is<Core.Sending.Email>(m => m.Subject == "second")))
-            .Callback(() =>
+            .Callback(async () =>
             {
-                if (!allowSecondProcessing.IsSet)
-                {
-                    allowSecondProcessing.Wait(TimeSpan.FromSeconds(10));
-                }
-
+                await Task.Run(() => allowSecondProcessing.Wait(TimeSpan.FromSeconds(10)));
                 secondProcessedSignal.Set();
             })
             .Returns(Task.CompletedTask);
@@ -453,8 +444,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
            .AddHostedService<SendEmailQueueConsumer>()
            .AddSingleton(sendEmailQueueConsumerLogger)
            .AddSingleton<ICommonProducer, CommonProducer>();
-        
-        _serviceProvider?.Dispose();
+
         _serviceProvider = services.BuildServiceProvider();
 
         var emailSendingConsumer = _serviceProvider.GetService(typeof(IHostedService)) as SendEmailQueueConsumer;

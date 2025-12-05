@@ -23,7 +23,7 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
         private int _consumerClosedFlag;
         private int _shutdownStartedFlag;
 
-        private readonly int _maxBatchSize = 100;
+        private readonly int _maxBatchSize = 50;
         private readonly int _batchPollTimeoutMs = 100;
 
         private readonly string _subscribedTopicName;
@@ -253,11 +253,11 @@ namespace Altinn.Notifications.Integrations.Kafka.Consumers
 
             var consumerConfig = new ConsumerConfig(configuration.ConsumerConfig)
             {
-                FetchWaitMaxMs = 100,
-                QueuedMinMessages = 100,
+                FetchWaitMaxMs = 50,
+                QueuedMinMessages = 50,
                 SessionTimeoutMs = 30000,
                 EnableAutoCommit = false,
-                FetchMinBytes = 512 * 1024,
+                FetchMinBytes = 256 * 1024,
                 MaxPollIntervalMs = 300000,
                 HeartbeatIntervalMs = 5000,
                 EnableAutoOffsetStore = false,

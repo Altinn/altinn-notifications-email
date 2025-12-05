@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 
 using Altinn.Notifications.Email.Integrations.Configuration;
-using Altinn.Notifications.Email.Integrations.Consumers;
+using Altinn.Notifications.Email.Integrations.Utilities;
 
 using Confluent.Kafka;
 

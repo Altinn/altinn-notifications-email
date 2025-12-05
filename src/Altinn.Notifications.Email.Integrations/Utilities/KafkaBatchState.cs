@@ -1,6 +1,6 @@
 ﻿using Confluent.Kafka;
 
-namespace Altinn.Notifications.Email.Integrations.Consumers;
+namespace Altinn.Notifications.Email.Integrations.Utilities;
 
 /// <summary>
 /// Represents the state of a Kafka message batch during processing, tracking both input messages and successful outcomes.

@@ -54,13 +54,13 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
 
             if (result.Status != PersistenceStatus.Persisted)
             {
-                _logger.LogError("// KafkaProducer // ProduceAsync // Message not ack'd by all brokers (value: '{Message}'). Delivery status: {Status}", message, result.Status);
+                _logger.LogError("// KafkaProducer // ProduceAsync // Message not ack'd by all brokers. Delivery status: {Status}", result.Status);
                 return false;
             }
         }
         catch (ProduceException<long, string> ex)
         {
-            _logger.LogError(ex, "// KafkaProducer // ProduceAsync // Permanent error: {Message} for message (value: '{DeliveryResult}')", ex.Message, ex.DeliveryResult.Value);
+            _logger.LogError(ex, "// KafkaProducer // ProduceAsync // Permanent error: {Message} for message (status: '{Status}')", ex.Message, ex.DeliveryResult.Status);
             return false;
         }
 

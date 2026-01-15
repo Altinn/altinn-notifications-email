@@ -66,6 +66,6 @@ public sealed class EmailSendingAcceptedConsumer : KafkaConsumerBase
 
     private async Task RetryOperation(string message)
     {
-        await _producer.ProduceAsync(_retryTopicName, message);
+        await _producer.ProduceAsync(_retryTopicName, message, "Message", message);
     }
 }

@@ -47,18 +47,18 @@ public class StatusService : IStatusService
                 SendResult = result
             };
 
-            await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
+            await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize(), "Message", operationIdentifier.Serialize());
         }
         else
         {
             operationIdentifier.LastStatusCheck = _dateTime.UtcNow();
-            await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
+            await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize(), "Message", operationIdentifier.Serialize());
         }
     }
 
     /// <inheritdoc/>
     public async Task UpdateSendStatus(SendOperationResult sendOperationResult)
     {
-        await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, sendOperationResult.Serialize());
+        await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, sendOperationResult.Serialize(), "Message", sendOperationResult.Serialize());
     }
 }

@@ -42,7 +42,9 @@ public class StatusServiceTests
             It.Is<string>(s =>
                 s.Contains("\"operationId\":\"operation-id\"") &&
                 s.Contains("\"sendResult\":\"Delivered\"") &&
-                s.Contains($"\"notificationId\":\"{id}\""))));
+                s.Contains($"\"notificationId\":\"{id}\"")),
+            It.IsAny<string>(),
+            It.IsAny<string>()));
 
         Mock<IDateTimeService> dateTimeMock = new();
 
@@ -76,8 +78,10 @@ public class StatusServiceTests
         Mock<ICommonProducer> producerMock = new();
         producerMock.Setup(p => p.ProduceAsync(
             It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailSendingAcceptedTopicName))),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
             It.IsAny<string>()))
-              .Callback<string, string>((topicName, serializedIdentifier) =>
+              .Callback<string, string, string, string>((topicName, serializedIdentifier, _, _) =>
               {
                   actualProducerInput = serializedIdentifier;
               });
@@ -113,7 +117,9 @@ public class StatusServiceTests
             It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailStatusUpdatedTopicName))),
             It.Is<string>(s =>
                 s.Contains("\"operationId\":\"00000000-0000-0000-0000-000000000000\"") &&
-                s.Contains("\"sendResult\":\"Delivered\""))));
+                s.Contains("\"sendResult\":\"Delivered\"")),
+            It.IsAny<string>(),
+            It.IsAny<string>()));
         
         Mock<IDateTimeService> dateTimeMock = new();
 

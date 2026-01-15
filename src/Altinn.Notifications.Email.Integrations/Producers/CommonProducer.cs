@@ -43,7 +43,7 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
     }
 
     /// <inheritdoc/>
-    public async Task<bool> ProduceAsync(string topic, string message)
+    public async Task<bool> ProduceAsync(string topic, string message, string? identifierName, string? identifier)
     {
         try
         {
@@ -54,13 +54,13 @@ public sealed class CommonProducer : ICommonProducer, IDisposable
 
             if (result.Status != PersistenceStatus.Persisted)
             {
-                _logger.LogError("// KafkaProducer // ProduceAsync // Message not ack'd by all brokers. Delivery status: {Status}", result.Status);
+                _logger.LogError("// KafkaProducer // ProduceAsync // Message not ack'd by all brokers. Delivery status: {Status}, {IdentifierName}: {Identifier}", result.Status, identifierName, identifier);
                 return false;
             }
         }
         catch (ProduceException<Null, string> ex)
         {
-            _logger.LogError(ex, "// KafkaProducer // ProduceAsync // Permanent error: {Message} for message (status: '{Status}')", ex.Message, ex.DeliveryResult.Status);
+            _logger.LogError(ex, "// KafkaProducer // ProduceAsync // Permanent error: {Message} for message (status: '{Status}'), {IdentifierName}: {Identifier}", ex.Message, ex.DeliveryResult.Status, identifierName, identifier);
             return false;
         }
 

@@ -40,7 +40,9 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
                 It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailSendingAcceptedTopicName))),
                 It.Is<string>(s =>
                 s.Contains("\"operationId\":\"operation-id\"") &&
-                s.Contains($"\"notificationId\":\"{id}\""))));
+                s.Contains($"\"notificationId\":\"{id}\"")),
+                It.IsAny<string>(),
+                It.IsAny<string>()));
 
             var sut = new SendingService(clientMock.Object, producerMock.Object, _topicSettings);
 
@@ -68,7 +70,9 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
                 It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailStatusUpdatedTopicName))),
                 It.Is<string>(s =>
                 s.Contains($"\"notificationId\":\"{id}\"") &&
-                s.Contains("\"sendResult\":\"Failed_InvalidEmailFormat\""))));
+                s.Contains("\"sendResult\":\"Failed_InvalidEmailFormat\"")),
+                It.IsAny<string>(),
+                It.IsAny<string>()));
 
             var sut = new SendingService(clientMock.Object, producerMock.Object, _topicSettings);
 
@@ -99,13 +103,17 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
                 It.Is<string>(s => s.Equals(nameof(_topicSettings.AltinnServiceUpdateTopicName))),
                 It.Is<string>(s =>
                 s.Contains("\"source\":\"platform-notifications-email\"") &&
-                s.Contains("\"schema\":\"ResourceLimitExceeded\""))));
+                s.Contains("\"schema\":\"ResourceLimitExceeded\"")),
+                It.IsAny<string>(),
+                It.IsAny<string>()));
 
             producerMock.InSequence(sequence).Setup(p => p.ProduceAsync(
                 It.Is<string>(s => s.Equals(nameof(_topicSettings.EmailStatusUpdatedTopicName))),
                 It.Is<string>(s =>
                 s.Contains($"\"notificationId\":\"{id}\"") &&
-                s.Contains("\"sendResult\":\"Failed_TransientError\""))));
+                s.Contains("\"sendResult\":\"Failed_TransientError\"")),
+                It.IsAny<string>(),
+                It.IsAny<string>()));
 
             var sut = new SendingService(clientMock.Object, producerMock.Object, _topicSettings);
 

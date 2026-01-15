@@ -65,8 +65,9 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         var email = new Core.Sending.Email(Guid.NewGuid(), "test", "body", "fromAddress", "toAddress", EmailContentType.Plain);
 
         // Act
+        var message = JsonSerializer.Serialize(email);
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, message, "NotificationId", email.NotificationId.ToString());
 
         bool processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
         await testFixture.Consumer.StopAsync(CancellationToken.None);
@@ -86,7 +87,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, "Not an email");
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, "Not an email", "message", "Not an email");
 
         bool processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(50));
         await testFixture.Consumer.StopAsync(CancellationToken.None);
@@ -115,7 +116,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
         var processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
         await testFixture.Consumer.StopAsync(CancellationToken.None);
@@ -209,7 +210,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         foreach (var email in emails)
         {
-            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
         }
 
         var isProcessed = await WaitForConditionAsync(() => allMessagesProcessedSignal.IsSet, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(25));
@@ -234,7 +235,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
         bool processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
         await testFixture.Consumer.StopAsync(CancellationToken.None);
@@ -254,7 +255,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
 
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, null!);
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, null!, null, null);
 
         bool anyProcessed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(50));
 
@@ -284,7 +285,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Act - Process a message and then rapidly stop to increase chance of rebalance timing
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
         var processed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
@@ -318,7 +319,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         var stopTask = testFixture.Consumer.StopAsync(CancellationToken.None);
 
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
         await stopTask;
 
@@ -368,7 +369,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
             // Act - Process a message on first topic, then quickly stop to trigger revocation
             await firstTestFixture.Consumer.StartAsync(CancellationToken.None);
-            await producer.ProduceAsync(firstTopicName, JsonSerializer.Serialize(email));
+            await producer.ProduceAsync(firstTopicName, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
             var processed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
             await firstTestFixture.Consumer.StopAsync(CancellationToken.None);
@@ -416,7 +417,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
         var isProcessed = await WaitForConditionAsync(() => processedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
@@ -462,7 +463,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         var retryProducerMock = new Mock<ICommonProducer>();
         retryProducerMock
-            .Setup(p => p.ProduceAsync(retryTopicName, It.IsAny<string>()))
+            .Setup(p => p.ProduceAsync(retryTopicName, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Callback(retryProducedSignal.Set)
             .ReturnsAsync(true);
 
@@ -491,7 +492,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             await emailSendingConsumer.StartAsync(CancellationToken.None);
 
             var email = new Core.Sending.Email(Guid.NewGuid(), "retry-test", "body", "from", "to", EmailContentType.Plain);
-            await realProducer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+            await realProducer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
 
             bool retryObserved = await WaitForConditionAsync(() => retryProducedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
@@ -500,7 +501,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
             // Assert
             Assert.True(retryObserved, "Retry pathway did not complete promptly.");
             sendingServiceMock.Verify(e => e.SendAsync(It.IsAny<Core.Sending.Email>()), Times.Once);
-            retryProducerMock.Verify(p => p.ProduceAsync(retryTopicName, It.IsAny<string>()), Times.Once);
+            retryProducerMock.Verify(p => p.ProduceAsync(retryTopicName, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
         }
         finally
         {
@@ -545,8 +546,8 @@ public class EmailSendingConsumerTests : IAsyncLifetime
         // Act
         await firstTestFixture.Consumer.StartAsync(CancellationToken.None);
 
-        await firstTestFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail));
-        await firstTestFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(secondEmail));
+        await firstTestFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail), "NotificationId", firstEmail.NotificationId.ToString());
+        await firstTestFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(secondEmail), "NotificationId", secondEmail.NotificationId.ToString());
 
         var firstProcessed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
@@ -603,14 +604,14 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         // Act
         await testFixture.Consumer.StartAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(firstEmail), "NotificationId", firstEmail.NotificationId.ToString());
         var isFirstProcessed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
 
         var stopTask = testFixture.Consumer.StopAsync(CancellationToken.None);
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(duringShutdownEmail));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(duringShutdownEmail), "NotificationId", duringShutdownEmail.NotificationId.ToString());
         await stopTask;
 
-        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(afterStopEmail));
+        await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(afterStopEmail), "NotificationId", afterStopEmail.NotificationId.ToString());
         await Task.Delay(TimeSpan.FromSeconds(1));
 
         // Assert
@@ -658,7 +659,7 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         foreach (var email in emails)
         {
-            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email), "NotificationId", email.NotificationId.ToString());
         }
 
         var processedFirst100 = await WaitForConditionAsync(() => reached100Signal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
@@ -709,7 +710,8 @@ public class EmailSendingConsumerTests : IAsyncLifetime
 
         foreach (var email in emails)
         {
-            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, JsonSerializer.Serialize(email));
+            var message = JsonSerializer.Serialize(email);
+            await testFixture.Producer.ProduceAsync(_emailSendingConsumerTopic, message, "message", message);
         }
 
         var firstProcessed = await WaitForConditionAsync(() => firstProcessedSignal.IsSet, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));

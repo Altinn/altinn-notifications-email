@@ -79,7 +79,7 @@ namespace Altinn.Notifications.Email.IntegrationTests.Integrations
             }
 
             using CommonProducer kafkaProducer = KafkaUtil.GetKafkaProducer(_serviceProvider);
-            await kafkaProducer.ProduceAsync(_emailSendingAcceptedTopicName, message);
+            await kafkaProducer.ProduceAsync(_emailSendingAcceptedTopicName, message, "message", message);
         }
 
         private EmailSendingAcceptedConsumer GetConsumer(IStatusService? statusService = null)

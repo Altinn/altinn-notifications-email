@@ -10,5 +10,7 @@ public interface ICommonProducer
     /// </summary>
     /// <param name="topic">The topic to be written to</param>
     /// <param name="message">The message to write to the topic</param>
-    public Task<bool> ProduceAsync(string topic, string message);
+    /// <param name="identifierName">The name of the identifier for logging purposes</param>
+    /// <param name="identifier">The identifier value for logging purposes</param>
+    public Task<bool> ProduceAsync(string topic, string message, string? identifierName, string? identifier);
 }

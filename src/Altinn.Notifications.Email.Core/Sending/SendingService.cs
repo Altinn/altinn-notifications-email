@@ -44,7 +44,7 @@ public class SendingService : ISendingService
                     OperationId = operationId
                 };
 
-                await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize());
+                await _producer.ProduceAsync(_settings.EmailSendingAcceptedTopicName, operationIdentifier.Serialize(), "NotificationId", operationIdentifier.NotificationId.ToString());
             },
             async emailSendFailResponse =>
             {
@@ -63,7 +63,7 @@ public class SendingService : ISendingService
                         Data = resourceLimitExceeded.Serialize()
                     };
 
-                    await _producer.ProduceAsync(_settings.AltinnServiceUpdateTopicName, genericServiceUpdate.Serialize());
+                    await _producer.ProduceAsync(_settings.AltinnServiceUpdateTopicName, genericServiceUpdate.Serialize(), "ResourceLimitExceeded", resourceLimitExceeded.ResetTime.ToString());
                 }
 
                 var operationResult = new SendOperationResult()
@@ -72,7 +72,7 @@ public class SendingService : ISendingService
                     SendResult = emailSendFailResponse.SendResult
                 };
 
-                await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize());
+                await _producer.ProduceAsync(_settings.EmailStatusUpdatedTopicName, operationResult.Serialize(), "NotificationId", email.NotificationId.ToString());
             });
     }
 }

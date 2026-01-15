@@ -112,8 +112,10 @@ namespace Altinn.Notifications.Email.Tests.Email.Core.Sending
                 It.Is<string>(s =>
                 s.Contains($"\"notificationId\":\"{id}\"") &&
                 s.Contains("\"sendResult\":\"Failed_TransientError\"")),
-                It.IsAny<string>(),
-                It.IsAny<string>()));
+                It.Is<string>(
+                    s => s.Contains("NotificationId")),
+                It.Is<string>(
+                    s => s.Contains($"{id}"))));
 
             var sut = new SendingService(clientMock.Object, producerMock.Object, _topicSettings);
 

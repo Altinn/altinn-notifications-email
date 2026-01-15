@@ -62,6 +62,6 @@ public sealed class SendEmailQueueConsumer : KafkaConsumerBase
             _logger.LogError("// SendEmailQueueConsumer // RetryEmail // Deserialization of message failed. {Message}", message);
         }
 
-        await _producer.ProduceAsync(_retryTopicName, message, "NotificationId", email.NotificationId.ToString());
+        await _producer.ProduceAsync(_retryTopicName, message, "NotificationId", succeeded ? email.NotificationId.ToString() : null);
     }
 }

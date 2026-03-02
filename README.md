@@ -2,9 +2,7 @@
 
 **This repository is no longer being maintained.**
 
-The application in this repository has been moved into the Altinn Notifications repository.
-
-The email service component can be found at: [`components/email-service`](https://github.com/Altinn/altinn-notifications/tree/main/components/email-service).
+The application in this repository has been moved into the Altinn Notifications repository and can be found at: [`components/email-service`](https://github.com/Altinn/altinn-notifications/tree/main/components/email-service).
 
 ---
 

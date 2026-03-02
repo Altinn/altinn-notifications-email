@@ -1,3 +1,15 @@
+# ⚠️ This Repository Has Been Archived
+
+**This repository is no longer maintained.**
+
+The functionality from this repository has been merged into the main Altinn Notifications monorepo.
+
+👉 **Please use [altinn-notifications](https://github.com/Altinn/altinn-notifications) instead.**
+
+The email service component can be found at: [`components/email-service`](https://github.com/Altinn/altinn-notifications/tree/main/components/email-service).
+
+---
+
 # altinn-notifications-email
 
 This component handles the functionality related to sending an email through Altinn Notifications.
